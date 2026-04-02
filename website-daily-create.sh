@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.3.0
+# Version: 1.4.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -486,11 +486,25 @@ step_restore() {
     # รอให้ WP-CLI เห็น AI1WM command หลัง WP Toolkit install
     sleep 5
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
+
+    # Debug: แสดงคำสั่งที่จะรัน
+    log_info "CMD: sudo -u $CPUSER $PHP_CLI $WP_CLI ai1wm restore $WPRESS_FILE --path=$DOCROOT"
+
     local RESULT
     local EXIT_CODE
     RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
         ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
     EXIT_CODE=$?
+
+    # ถ้า fail → แสดง error + ลอง retry อีก 1 ครั้ง
+    if [ $EXIT_CODE -ne 0 ]; then
+        log_warn "Restore attempt 1 failed (exit $EXIT_CODE) — retry ใน 10 วินาที"
+        log_warn "Output: $(echo "$RESULT" | grep -i 'error\|warning\|fail\|not a registered' | head -3)"
+        sleep 10
+        RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
+            ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
+        EXIT_CODE=$?
+    fi
 
     if [ $EXIT_CODE -eq 124 ]; then
         log_warn "$DOMAIN — restore timeout ${TIMEOUT_RESTORE}s"
@@ -500,6 +514,7 @@ step_restore() {
 
     if [ $EXIT_CODE -ne 0 ]; then
         log_warn "$DOMAIN — restore failed (exit $EXIT_CODE)"
+        log_warn "Error output: $(echo "$RESULT" | grep -i 'error\|warning\|fail\|not a registered' | head -5)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (restore failed)\n"
         return 1
     fi
