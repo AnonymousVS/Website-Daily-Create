@@ -445,16 +445,6 @@ step_install_wp() {
         return 1
     fi
 
-    # เช็ค document root
-    local DOCROOT_CHECK
-    DOCROOT_CHECK=$(wp-toolkit --info -domain-name "$DOMAIN" -format json 2>/dev/null \
-        | grep -o '"path":"[^"]*"' | head -1)
-    if ! echo "$DOCROOT_CHECK" | grep -q "public_html/${DOMAIN}"; then
-        log_warn "$DOMAIN — document root ไม่ตรง: $DOCROOT_CHECK (ต้องตรวจสอบ)"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (docroot mismatch)\n"
-        return 1
-    fi
-
     log_info "WordPress + Vision Set สำเร็จ"
     return 0
 }
