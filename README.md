@@ -3,8 +3,12 @@
 Bulk WordPress Site Creation Pipeline — สร้างเว็บ WordPress จาก .wpress template พร้อมตั้งค่า QUIC.cloud, Cloudflare, Rank Math อัตโนมัติ
 
 ## คำสั่งรัน
-
 ```bash
+curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
+
+
+
+
 # ติดตั้ง (ครั้งเดียว)
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh \
   -o /usr/local/sbin/website-daily-create.sh && chmod +x /usr/local/sbin/website-daily-create.sh
