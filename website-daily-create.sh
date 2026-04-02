@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.0.0
+# Version: 1.1.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -10,6 +10,8 @@
 # ============================================================================
 
 set -o pipefail
+
+VERSION="1.1.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -154,6 +156,7 @@ get_disk_free_gb() {
 preflight_check() {
     echo ""
     echo "========================================"
+    echo "  Website Daily Create v${VERSION}"
     echo "  Pre-flight Check"
     echo "========================================"
     echo ""
@@ -757,7 +760,7 @@ show_summary() {
 
     echo ""
     echo "════════════════════════════════════════"
-    echo "  สรุปผล — $(date '+%d %b %Y %H:%M')"
+    echo "  สรุปผล — v${VERSION} — $(date '+%d %b %Y %H:%M')"
     echo "════════════════════════════════════════"
     echo -e "  ${GREEN}✅ สำเร็จ: $COUNT_SUCCESS${NC}"
     echo -e "  ${YELLOW}⚠️ ข้าม: $COUNT_SKIP${NC}"
