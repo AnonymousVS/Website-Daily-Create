@@ -445,14 +445,6 @@ step_install_wp() {
         return 1
     fi
 
-    # เช็ค AI1WM active (ใช้ WP-CLI ตรง — เชื่อถือกว่า WP Toolkit JSON)
-    if ! sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" plugin is-active all-in-one-wp-migration \
-        --path="$DOCROOT" 2>/dev/null; then
-        log_warn "$DOMAIN — AI1WM ไม่ active หลัง install (ต้องตรวจสอบ)"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (AI1WM not active)\n"
-        return 1
-    fi
-
     # เช็ค document root
     local DOCROOT_CHECK
     DOCROOT_CHECK=$(wp-toolkit --info -domain-name "$DOMAIN" -format json 2>/dev/null \
