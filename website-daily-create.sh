@@ -173,7 +173,7 @@ preflight_check() {
     fi
     # ตรวจ format (5 columns)
     local BAD_LINES
-    BAD_LINES=$(tail -n +2 "$CSV_FILE" | awk -F',' 'NF!=6 && NF!=0 {print NR+1": "$0}')
+    BAD_LINES=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | awk -F',' 'NF!=6 && NF!=0 {print NR+1": "$0}')
     if [ -n "$BAD_LINES" ]; then
         log_error "CSV format ผิด (ต้องมี 6 columns: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token):"
         echo "$BAD_LINES"
@@ -181,13 +181,13 @@ preflight_check() {
     fi
     # ตรวจ domain ซ้ำ
     local DUP_DOMAINS
-    DUP_DOMAINS=$(tail -n +2 "$CSV_FILE" | cut -d',' -f1 | sort | uniq -d)
+    DUP_DOMAINS=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | cut -d',' -f1 | sort | uniq -d)
     if [ -n "$DUP_DOMAINS" ]; then
         log_error "CSV มี domain ซ้ำ:"
         echo "$DUP_DOMAINS"
         return 1
     fi
-    COUNT_TOTAL=$(tail -n +2 "$CSV_FILE" | grep -c '[^[:space:]]')
+    COUNT_TOTAL=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | grep -c '[^[:space:]]')
     log_info "CSV OK — $COUNT_TOTAL domains"
 
     # 2. Commands
@@ -242,7 +242,7 @@ preflight_check() {
         if [ ! -d "/var/cpanel/users" ] || [ ! -f "/var/cpanel/users/$CPUSER" ]; then
             MISSING_USERS="$MISSING_USERS $CPUSER"
         fi
-    done < <(tail -n +2 "$CSV_FILE" | grep '[^[:space:]]')
+    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
     if [ -n "$MISSING_USERS" ]; then
         log_error "cPanel users ไม่มี:$MISSING_USERS"
         return 1
@@ -260,7 +260,7 @@ preflight_check() {
         if [ ! -f "${TEMPLATE_DIR}/${THEME}.wpress" ]; then
             MISSING_TEMPLATES="$MISSING_TEMPLATES ${THEME}.wpress"
         fi
-    done < <(tail -n +2 "$CSV_FILE" | grep '[^[:space:]]')
+    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
     if [ -n "$MISSING_TEMPLATES" ]; then
         log_error "Templates ไม่มี:$MISSING_TEMPLATES"
         return 1
@@ -274,7 +274,7 @@ preflight_check() {
         if [ -n "$QC_CF_EMAIL" ] && [ -z "$QC_TOKEN" ]; then
             MISSING_QUIC="$MISSING_QUIC  - $DOMAIN ($QC_CF_EMAIL ไม่มี token)\n"
         fi
-    done < <(tail -n +2 "$CSV_FILE" | grep '[^[:space:]]')
+    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
     if [ -n "$MISSING_QUIC" ]; then
         log_warn "QUIC.cloud token ไม่ครบ (จะข้าม link):"
         echo -e "$MISSING_QUIC"
@@ -305,7 +305,7 @@ preflight_check() {
             EXISTING_DOMAINS="$EXISTING_DOMAINS  - $DOMAIN\n"
             EXISTING_COUNT=$((EXISTING_COUNT+1))
         fi
-    done < <(tail -n +2 "$CSV_FILE" | grep '[^[:space:]]')
+    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
     if [ $EXISTING_COUNT -gt 0 ]; then
         log_warn "Domains ที่มีอยู่แล้ว ($EXISTING_COUNT เว็บ — จะข้าม):"
         echo -e "$EXISTING_DOMAINS"
@@ -891,7 +891,7 @@ main() {
             break
         fi
 
-    done < <(tail -n +2 "$CSV_FILE" | grep '[^[:space:]]')
+    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
 
     # สรุป
     show_summary
