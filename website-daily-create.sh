@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.4.0
+# Version: 1.5.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -426,6 +426,7 @@ step_install_wp() {
     start_spinner "WP Toolkit install $DOMAIN..."
     RESULT=$(timeout "$TIMEOUT_WPTOOLKIT" wp-toolkit --install \
         -domain-name "$DOMAIN" \
+        -path "/" \
         -set-id "$VISION_SET_ID" 2>&1)
     local EXIT_CODE=$?
     stop_spinner
@@ -444,11 +445,26 @@ step_install_wp() {
 
     if [ $EXIT_CODE -ne 0 ]; then
         log_warn "$DOMAIN — WP Toolkit install failed (exit $EXIT_CODE)"
+        log_warn "Output: $(echo "$RESULT" | grep -i 'error\|fail\|exist\|cannot' | head -3)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP Toolkit failed)\n"
         return 1
     fi
 
-    log_info "WordPress + Vision Set สำเร็จ"
+    # ยืนยัน WordPress ติดตั้งที่ root เท่านั้น — ห้ามอยู่ที่ /wordpress/
+    if [ ! -f "$DOCROOT/wp-config.php" ]; then
+        if [ -f "$DOCROOT/wordpress/wp-config.php" ]; then
+            log_warn "$DOMAIN — WP ติดตั้งที่ /wordpress/ (ต้องติดตั้งที่ root เท่านั้น)"
+            # ลบ /wordpress/ ออก
+            wp-toolkit --remove -domain-name "$DOMAIN" -path "/wordpress" 2>/dev/null
+            rm -rf "$DOCROOT/wordpress" 2>/dev/null
+        else
+            log_warn "$DOMAIN — wp-config.php ไม่เจอที่ root"
+        fi
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP not at root)\n"
+        return 1
+    fi
+
+    log_info "WordPress + Vision Set สำเร็จ (root)"
     return 0
 }
 
