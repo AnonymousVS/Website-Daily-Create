@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.1.0
+# Version: 1.2.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -485,11 +485,10 @@ step_restore() {
     # Step 5: Restore
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
     local RESULT
-    start_spinner "Restoring $DOMAIN..."
+    local EXIT_CODE
     RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
         ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
-    local EXIT_CODE=$?
-    stop_spinner
+    EXIT_CODE=$?
 
     if [ $EXIT_CODE -eq 124 ]; then
         log_warn "$DOMAIN — restore timeout ${TIMEOUT_RESTORE}s"
