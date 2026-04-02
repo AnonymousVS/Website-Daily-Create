@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.5.0
+# Version: 1.2.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.5.0"
+VERSION="1.2.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -426,7 +426,6 @@ step_install_wp() {
     start_spinner "WP Toolkit install $DOMAIN..."
     RESULT=$(timeout "$TIMEOUT_WPTOOLKIT" wp-toolkit --install \
         -domain-name "$DOMAIN" \
-        -path "/" \
         -set-id "$VISION_SET_ID" 2>&1)
     local EXIT_CODE=$?
     stop_spinner
@@ -445,26 +444,11 @@ step_install_wp() {
 
     if [ $EXIT_CODE -ne 0 ]; then
         log_warn "$DOMAIN — WP Toolkit install failed (exit $EXIT_CODE)"
-        log_warn "Output: $(echo "$RESULT" | grep -i 'error\|fail\|exist\|cannot' | head -3)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP Toolkit failed)\n"
         return 1
     fi
 
-    # ยืนยัน WordPress ติดตั้งที่ root เท่านั้น — ห้ามอยู่ที่ /wordpress/
-    if [ ! -f "$DOCROOT/wp-config.php" ]; then
-        if [ -f "$DOCROOT/wordpress/wp-config.php" ]; then
-            log_warn "$DOMAIN — WP ติดตั้งที่ /wordpress/ (ต้องติดตั้งที่ root เท่านั้น)"
-            # ลบ /wordpress/ ออก
-            wp-toolkit --remove -domain-name "$DOMAIN" -path "/wordpress" 2>/dev/null
-            rm -rf "$DOCROOT/wordpress" 2>/dev/null
-        else
-            log_warn "$DOMAIN — wp-config.php ไม่เจอที่ root"
-        fi
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP not at root)\n"
-        return 1
-    fi
-
-    log_info "WordPress + Vision Set สำเร็จ (root)"
+    log_info "WordPress + Vision Set สำเร็จ"
     return 0
 }
 
@@ -499,28 +483,12 @@ step_restore() {
     fi
 
     # Step 5: Restore
-    # รอให้ WP-CLI เห็น AI1WM command หลัง WP Toolkit install
-    sleep 5
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
-
-    # Debug: แสดงคำสั่งที่จะรัน
-    log_info "CMD: sudo -u $CPUSER $PHP_CLI $WP_CLI ai1wm restore $WPRESS_FILE --path=$DOCROOT"
-
     local RESULT
     local EXIT_CODE
     RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
         ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
     EXIT_CODE=$?
-
-    # ถ้า fail → แสดง error + ลอง retry อีก 1 ครั้ง
-    if [ $EXIT_CODE -ne 0 ]; then
-        log_warn "Restore attempt 1 failed (exit $EXIT_CODE) — retry ใน 10 วินาที"
-        log_warn "Output: $(echo "$RESULT" | grep -i 'error\|warning\|fail\|not a registered' | head -3)"
-        sleep 10
-        RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
-            ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
-        EXIT_CODE=$?
-    fi
 
     if [ $EXIT_CODE -eq 124 ]; then
         log_warn "$DOMAIN — restore timeout ${TIMEOUT_RESTORE}s"
@@ -530,7 +498,6 @@ step_restore() {
 
     if [ $EXIT_CODE -ne 0 ]; then
         log_warn "$DOMAIN — restore failed (exit $EXIT_CODE)"
-        log_warn "Error output: $(echo "$RESULT" | grep -i 'error\|warning\|fail\|not a registered' | head -5)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (restore failed)\n"
         return 1
     fi
