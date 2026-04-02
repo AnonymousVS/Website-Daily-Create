@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.2.0
+# Version: 1.3.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -483,6 +483,8 @@ step_restore() {
     fi
 
     # Step 5: Restore
+    # รอให้ WP-CLI เห็น AI1WM command หลัง WP Toolkit install
+    sleep 5
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
     local RESULT
     local EXIT_CODE
