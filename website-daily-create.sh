@@ -414,6 +414,8 @@ step_wait_cpanel() {
 
 step_install_wp() {
     local DOMAIN="$1"
+    local CPUSER="$2"
+    local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
     log_step "Step 3: ติดตั้ง WordPress + Vision Set"
 
@@ -443,13 +445,9 @@ step_install_wp() {
         return 1
     fi
 
-    # เช็ค AI1WM active
-    local AI1WM_CHECK
-    AI1WM_CHECK=$(wp-toolkit --info -domain-name "$DOMAIN" -plugins -format json 2>/dev/null \
-        | grep -o '"all-in-one-wp-migration".*"status":"[^"]*"' \
-        | grep -o '"status":"[^"]*"' \
-        | grep -o 'active')
-    if [ "$AI1WM_CHECK" != "active" ]; then
+    # เช็ค AI1WM active (ใช้ WP-CLI ตรง — เชื่อถือกว่า WP Toolkit JSON)
+    if ! sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" plugin is-active all-in-one-wp-migration \
+        --path="$DOCROOT" 2>/dev/null; then
         log_warn "$DOMAIN — AI1WM ไม่ active หลัง install (ต้องตรวจสอบ)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (AI1WM not active)\n"
         return 1
@@ -739,7 +737,7 @@ process_site() {
     [ $? -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
     # Step 3: Install WordPress
-    step_install_wp "$DOMAIN"
+    step_install_wp "$DOMAIN" "$CPUSER"
     RC=$?
     [ $RC -eq 2 ] && return 2  # หยุด loop
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
