@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.0
+# Version: 2.5.1
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.5.0"
+VERSION="2.5.1"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -671,6 +671,7 @@ step_cleanup() {
     log_info "6.1 ลบ plugins เสร็จ"
 
     # 6.2 ลบ default themes (เก็บ active + parent + ใหม่สุด)
+    sleep 2
     local CURRENT_ACTIVE
     CURRENT_ACTIVE=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
         --path="$DOCROOT" --status=active --field=name 2>/dev/null)
@@ -713,7 +714,8 @@ step_cleanup() {
         log_info "6.2 ไม่มี theme ต้องลบ"
     fi
 
-    # 6.3 Activate theme (หลังลบ plugins/themes — อาจ reset theme ระหว่าง 6.1-6.2)
+    # 6.3 Activate theme (หลังลบ plugins/themes — รอ WordPress process เสร็จก่อน)
+    sleep 3
     log_step "6.3 Activate $ACTIVE_THEME"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
         --path="$DOCROOT" 2>/dev/null
