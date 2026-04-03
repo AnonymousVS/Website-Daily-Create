@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.1
+# Version: 2.5.2-debug
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.5.1"
+VERSION="2.5.2-debug"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -670,49 +670,50 @@ step_cleanup() {
         --path="$DOCROOT" 2>/dev/null
     log_info "6.1 ลบ plugins เสร็จ"
 
-    # 6.2 ลบ default themes (เก็บ active + parent + ใหม่สุด)
-    sleep 2
-    local CURRENT_ACTIVE
-    CURRENT_ACTIVE=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-        --path="$DOCROOT" --status=active --field=name 2>/dev/null)
-
-    local PARENT_THEME
-    PARENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-        --path="$DOCROOT" --status=parent --field=name 2>/dev/null)
-
-    local LATEST_DEFAULT=""
-    local LATEST_NUM=0
-    local ALL_THEMES
-    ALL_THEMES=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-        --path="$DOCROOT" --field=name 2>/dev/null)
-
-    while read -r T; do
-        local NUM
-        NUM=$(theme_to_num "$T")
-        if [ "$NUM" -gt "$LATEST_NUM" ]; then
-            LATEST_NUM=$NUM
-            LATEST_DEFAULT=$T
-        fi
-    done <<< "$ALL_THEMES"
-
-    local THEMES_TO_DELETE=""
-    while read -r T; do
-        local NUM
-        NUM=$(theme_to_num "$T")
-        if [ "$NUM" -gt 0 ]; then
-            if [ "$T" != "$CURRENT_ACTIVE" ] && [ "$T" != "$PARENT_THEME" ] && [ "$T" != "$LATEST_DEFAULT" ]; then
-                THEMES_TO_DELETE="$THEMES_TO_DELETE $T"
-            fi
-        fi
-    done <<< "$ALL_THEMES"
-
-    if [ -n "$THEMES_TO_DELETE" ]; then
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme delete \
-            $THEMES_TO_DELETE --path="$DOCROOT" 2>/dev/null
-        log_info "6.2 ลบ themes:$THEMES_TO_DELETE"
-    else
-        log_info "6.2 ไม่มี theme ต้องลบ"
-    fi
+    # 6.2 ลบ default themes — ปิดชั่วคราวเพื่อทดสอบ
+    log_info "6.2 ข้ามลบ themes (ปิดชั่วคราวเพื่อทดสอบ)"
+    # sleep 2
+    # local CURRENT_ACTIVE
+    # CURRENT_ACTIVE=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+    #     --path="$DOCROOT" --status=active --field=name 2>/dev/null)
+    #
+    # local PARENT_THEME
+    # PARENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+    #     --path="$DOCROOT" --status=parent --field=name 2>/dev/null)
+    #
+    # local LATEST_DEFAULT=""
+    # local LATEST_NUM=0
+    # local ALL_THEMES
+    # ALL_THEMES=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+    #     --path="$DOCROOT" --field=name 2>/dev/null)
+    #
+    # while read -r T; do
+    #     local NUM
+    #     NUM=$(theme_to_num "$T")
+    #     if [ "$NUM" -gt "$LATEST_NUM" ]; then
+    #         LATEST_NUM=$NUM
+    #         LATEST_DEFAULT=$T
+    #     fi
+    # done <<< "$ALL_THEMES"
+    #
+    # local THEMES_TO_DELETE=""
+    # while read -r T; do
+    #     local NUM
+    #     NUM=$(theme_to_num "$T")
+    #     if [ "$NUM" -gt 0 ]; then
+    #         if [ "$T" != "$CURRENT_ACTIVE" ] && [ "$T" != "$PARENT_THEME" ] && [ "$T" != "$LATEST_DEFAULT" ]; then
+    #             THEMES_TO_DELETE="$THEMES_TO_DELETE $T"
+    #         fi
+    #     fi
+    # done <<< "$ALL_THEMES"
+    #
+    # if [ -n "$THEMES_TO_DELETE" ]; then
+    #     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme delete \
+    #         $THEMES_TO_DELETE --path="$DOCROOT" 2>/dev/null
+    #     log_info "6.2 ลบ themes:$THEMES_TO_DELETE"
+    # else
+    #     log_info "6.2 ไม่มี theme ต้องลบ"
+    # fi
 
     # 6.3 Activate theme (หลังลบ plugins/themes — รอ WordPress process เสร็จก่อน)
     sleep 3
@@ -725,8 +726,11 @@ step_cleanup() {
     if [ "$CURRENT_THEME_CHECK" = "$ACTIVE_THEME" ]; then
         log_info "6.3 Theme active: $ACTIVE_THEME ✅"
     else
-        log_warn "6.3 Theme active: $CURRENT_THEME_CHECK (ควรเป็น $ACTIVE_THEME)"
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (activate $ACTIVE_THEME failed)\n"
+        log_warn "6.3 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK (ควรเป็น $ACTIVE_THEME)"
+        log_warn "6.3 กำลัง activate ซ้ำ..."
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
+            --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.3 → $CURRENT_THEME_CHECK)\n"
     fi
 
     # 6.4 แก้ Font CSS URL เก่า (AI1WM ไม่แก้ URL ในไฟล์ CSS)
@@ -746,12 +750,26 @@ step_cleanup() {
     else
         log_info "6.4 ไม่มี Blocksy font CSS (ข้าม)"
     fi
+    # เช็ค theme หลัง 6.4
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
+        log_warn "6.4 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Font CSS"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.4 → $CURRENT_THEME_CHECK)\n"
+    fi
 
     # 6.5 Freemius clone resolve
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config set \
         FS__RESOLVE_CLONE_AS long_term_duplicate \
         --type=constant --path="$DOCROOT" 2>/dev/null
     log_info "6.5 Freemius clone resolve เสร็จ"
+    # เช็ค theme หลัง 6.5
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
+        log_warn "6.5 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Freemius"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.5 → $CURRENT_THEME_CHECK)\n"
+    fi
 
     # 6.6 QUIC.cloud init + link
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
@@ -767,6 +785,13 @@ step_cleanup() {
     elif [ -n "$QC_CF_EMAIL" ]; then
         log_warn "6.6 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
         SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty)\n"
+    fi
+    # เช็ค theme หลัง 6.6
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
+        log_warn "6.6 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง QUIC.cloud"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.6 → $CURRENT_THEME_CHECK)\n"
     fi
 
     # 6.7 Cloudflare API setup
@@ -799,6 +824,13 @@ step_cleanup() {
             SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (CF Zone ID not found)\n"
         fi
     fi
+    # เช็ค theme หลัง 6.7
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
+        log_warn "6.7 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Cloudflare"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.7 → $CURRENT_THEME_CHECK)\n"
+    fi
 
     # 6.8 Rank Math connect
     log_step "6.8 Rank Math connect"
@@ -820,6 +852,13 @@ step_cleanup() {
     ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
         && log_info "6.8 Rank Math connected ($RANKMATH_EMAIL)" \
         || log_warn "6.8 Rank Math connect failed"
+    # เช็ค theme หลัง 6.8
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
+        log_warn "6.8 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Rank Math"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.8 → $CURRENT_THEME_CHECK)\n"
+    fi
 
     # 6.9 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
     log_step "6.9 ลบ Rank Math sitemap cache"
