@@ -1,17 +1,25 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.6.1
+# Version: 2.0.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
 # CSV Format: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token
 # Example:    a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_token,cf_global_api_key
 # ============================================================================
+# v2.0.0 Changes:
+#   - Copy method แทน symlink (ไม่ต้อง symlink)
+#   - Suppress PHP Deprecated warnings (-d error_reporting flag)
+#   - Fix exit code capture (local แยก 2 บรรทัด)
+#   - Fix CF Zone ID (wp eval update_option แทน litespeed-option set)
+#   - ลบ *.wpress ยืดหยุ่นทุกชื่อไฟล์
+#   - $PHP_CLI ห้าม quote (มี flag ต่อท้าย ต้อง word-split)
+# ============================================================================
 
 set -o pipefail
 
-VERSION="1.6.1"
+VERSION="2.0.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -31,11 +39,9 @@ TIMEOUT_WPTOOLKIT=120          # timeout WP Toolkit install (วินาที)
 TIMEOUT_RESTORE=600            # timeout AI1WM restore (วินาที)
 
 # --- Rank Math SEO (ใช้ค่าเดียวกันทุกเว็บ ไม่ต้องใส่ใน CSV) ---
-# เปลี่ยน email/api_key ที่นี่ ถ้าย้าย Rank Math account
-# หา API Key ได้ที่: rankmath.com/account/ → API Key
-RANKMATH_EMAIL="ufavisionseoteam@gmail.com"       # Rank Math account email
-RANKMATH_API_KEY="03cefb18bb49a91d3c619d2906b43db8"  # Rank Math API Key
-RANKMATH_PLAN="pro"                                # free / pro / business / agency
+RANKMATH_EMAIL="ufavisionseoteam@gmail.com"
+RANKMATH_API_KEY="03cefb18bb49a91d3c619d2906b43db8"
+RANKMATH_PLAN="pro"
 # ============================================================================
 
 # ========================== COLORS ==========================================
@@ -48,7 +54,8 @@ NC='\033[0m'
 
 # ========================== GLOBALS =========================================
 CSV_FILE=""
-PHP_CLI=""
+PHP_BIN=""      # PHP binary path เปล่าๆ (ใช้ตรวจ version)
+PHP_CLI=""      # PHP_BIN + suppress flag (ห้าม quote ตอนใช้)
 VISION_SET_ID=""
 LOG_FILE=""
 DATE_TAG=$(date '+%Y-%m-%d')
@@ -71,7 +78,6 @@ log_error() { echo -e "${RED}[❌]${NC} $1"; echo "[$(date '+%H:%M:%S')] [ERROR]
 log_step()  { echo -e "${CYAN}[→]${NC} $1"; echo "[$(date '+%H:%M:%S')] [STEP] $1" >> "$LOG_FILE"; }
 
 # Spinner — ใช้ระหว่างรอ command ที่ใช้เวลานาน
-# Usage: start_spinner "Installing..." → รัน command → stop_spinner
 SPINNER_PID=""
 start_spinner() {
     local MSG="$1"
@@ -129,7 +135,7 @@ find_vision_set_id() {
     echo "$ID"
 }
 
-# แปลงชื่อ theme เป็นตัวเลข
+# แปลงชื่อ default theme เป็นตัวเลข
 theme_to_num() {
     case "$1" in
         twentytwentyone)   echo 21;;
@@ -162,7 +168,6 @@ preflight_check() {
     echo ""
 
     local ERRORS=0
-    local WARNINGS=0
 
     # 1. CSV file
     log_step "1. ตรวจสอบ CSV file..."
@@ -174,15 +179,13 @@ preflight_check() {
         log_error "CSV file is empty: $CSV_FILE"
         return 1
     fi
-    # ตรวจ format (5 columns)
     local BAD_LINES
     BAD_LINES=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | awk -F',' 'NF!=6 && NF!=0 {print NR+1": "$0}')
     if [ -n "$BAD_LINES" ]; then
-        log_error "CSV format ผิด (ต้องมี 6 columns: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token):"
+        log_error "CSV format ผิด (ต้องมี 6 columns):"
         echo "$BAD_LINES"
         return 1
     fi
-    # ตรวจ domain ซ้ำ
     local DUP_DOMAINS
     DUP_DOMAINS=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | cut -d',' -f1 | sort | uniq -d)
     if [ -n "$DUP_DOMAINS" ]; then
@@ -208,16 +211,18 @@ preflight_check() {
     [ $ERRORS -gt 0 ] && return 1
     log_info "Commands OK"
 
-    # 3. PHP CLI
+    # 3. PHP CLI (หา binary + เพิ่ม suppress flag)
     log_step "3. ตรวจสอบ PHP CLI..."
-    PHP_CLI=$(find_php_cli)
-    if [ -z "$PHP_CLI" ]; then
+    PHP_BIN=$(find_php_cli)
+    if [ -z "$PHP_BIN" ]; then
         log_error "ไม่พบ PHP CLI ที่ใช้ได้"
         return 1
     fi
     local PHP_VER
-    PHP_VER=$("$PHP_CLI" -r "echo PHP_VERSION;" 2>/dev/null)
-    log_info "PHP CLI: $PHP_CLI (v$PHP_VER)"
+    PHP_VER=$("$PHP_BIN" -r "echo PHP_VERSION;" 2>/dev/null)
+    # เพิ่ม flag suppress Deprecated warning จาก WP Toolkit bundled WP-CLI
+    PHP_CLI="$PHP_BIN -d error_reporting=E_ALL&~E_DEPRECATED"
+    log_info "PHP CLI: $PHP_BIN (v$PHP_VER) + suppress deprecated"
 
     # 4. Vision Set
     log_step "4. ตรวจสอบ Vision Set..."
@@ -242,7 +247,7 @@ preflight_check() {
     log_step "6. ตรวจสอบ cPanel users..."
     local MISSING_USERS=""
     while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
-        if [ ! -d "/var/cpanel/users" ] || [ ! -f "/var/cpanel/users/$CPUSER" ]; then
+        if [ ! -f "/var/cpanel/users/$CPUSER" ]; then
             MISSING_USERS="$MISSING_USERS $CPUSER"
         fi
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
@@ -270,7 +275,7 @@ preflight_check() {
     fi
     log_info "Templates OK"
 
-    # 8. QUIC.cloud credentials ใน CSV
+    # 8. QUIC.cloud credentials
     log_step "8. ตรวจสอบ QUIC.cloud credentials..."
     local MISSING_QUIC=""
     while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
@@ -288,7 +293,7 @@ preflight_check() {
     # 9. Telegram
     log_step "9. ตรวจสอบ Telegram..."
     if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-        log_warn "Telegram bot token ไม่ได้ตั้ง (จะไม่ส่ง notification)"
+        log_warn "Telegram bot token ไม่ได้ตั้ง"
     else
         local TG_RESULT
         TG_RESULT=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null | grep -c '"ok":true')
@@ -323,7 +328,7 @@ preflight_check() {
         echo -e "  ${YELLOW}⚠️ ข้าม (มีอยู่แล้ว): $EXISTING_COUNT เว็บ${NC}"
     fi
     echo "  Server: $(hostname)"
-    echo "  PHP: $PHP_CLI"
+    echo "  PHP: $PHP_BIN"
     echo "  Vision Set ID: $VISION_SET_ID"
     echo "  Disk free: ${DISK_FREE}GB"
     echo "========================================"
@@ -359,32 +364,30 @@ step_create_domain() {
         subdomain="$SUBDOMAIN_PREFIX" \
         dir="public_html/$DOMAIN" 2>&1)
 
-    # เช็ค error
     if echo "$RESULT" | grep -q "already exists"; then
         log_warn "$DOMAIN — domain already exists"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (domain already exists)\n"
         return 1
     fi
     if echo "$RESULT" | grep -q "subdomain.*already exists"; then
-        log_warn "$DOMAIN — subdomain already exists (ต้องตรวจสอบ)"
+        log_warn "$DOMAIN — subdomain already exists"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (subdomain already exists)\n"
         return 1
     fi
     if echo "$RESULT" | grep -qi "max.*addon\|maximum.*addon"; then
         log_error "$DOMAIN — MAX ADDON DOMAINS REACHED"
         SUMMARY_FAIL="${SUMMARY_FAIL}  - $DOMAIN (max addon domains)\n"
-        return 2  # 2 = หยุด loop ทั้งหมด
+        return 2
     fi
     if echo "$RESULT" | grep -q "result: 1"; then
         log_info "Domain $DOMAIN สร้างสำเร็จ"
         return 0
     fi
 
-    # error อื่นๆ
     local ERR_MSG
     ERR_MSG=$(echo "$RESULT" | grep -i "reason:" | head -1)
     log_warn "$DOMAIN — create failed: $ERR_MSG"
-    SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (create failed: $ERR_MSG)\n"
+    SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (create failed)\n"
     return 1
 }
 
@@ -408,7 +411,7 @@ step_wait_cpanel() {
         WAITED=$((WAITED+2))
     done
 
-    log_warn "$DOMAIN — cPanel register timeout ${WAIT_CPANEL_MAX}s (ต้องตรวจสอบ)"
+    log_warn "$DOMAIN — cPanel register timeout ${WAIT_CPANEL_MAX}s"
     SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (cPanel register timeout)\n"
     return 1
 }
@@ -419,9 +422,101 @@ step_install_wp() {
     local DOMAIN="$1"
     local CPUSER="$2"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
+    local ROOT_PATH="/public_html/${DOMAIN}"
 
     log_step "Step 3: ติดตั้ง WordPress + Vision Set"
 
+    # --- 3.1 ตรวจสอบ WordPress ที่มีอยู่ด้วย WP Toolkit ---
+    log_step "3.1 ตรวจสอบ WordPress ใน $DOMAIN"
+    local CHECK
+    CHECK=$(wp-toolkit --list -domain-name "$DOMAIN" 2>&1)
+
+    # แยก root installation vs wrong-path installations
+    local ROOT_LINE
+    ROOT_LINE=$(echo "$CHECK" | grep -P "^\s+\d+\s+${ROOT_PATH}\s")
+    local ROOT_ID
+    ROOT_ID=$(echo "$ROOT_LINE" | grep -oP '^\s+\K\d+')
+
+    local WRONG_LINES
+    WRONG_LINES=$(echo "$CHECK" | grep -P "^\s+\d+\s+${ROOT_PATH}/")
+    local WRONG_COUNT
+    WRONG_COUNT=$(echo "$WRONG_LINES" | grep -cP '^\s+\d+' 2>/dev/null || echo 0)
+
+    local HAS_ROOT=false
+    local HAS_WRONG=false
+    [ -n "$ROOT_ID" ] && HAS_ROOT=true
+    [ "$WRONG_COUNT" -gt 0 ] 2>/dev/null && HAS_WRONG=true
+
+    # ========== กรณี B: มี WP ที่ root อย่างเดียว → skip ==========
+    if [ "$HAS_ROOT" = true ] && [ "$HAS_WRONG" = false ]; then
+        log_warn "$DOMAIN — พบ WordPress ติดตั้งอยู่แล้ว"
+        log_warn "  ตำแหน่ง: $ROOT_PATH (root) | ID: $ROOT_ID"
+        log_warn "  สถานะ: มี WordPress อยู่แล้วที่ตำแหน่งถูกต้อง — ไม่ติดตั้งซ้ำ"
+        log_warn "  ผลลัพธ์: ข้ามไป step ถัดไป"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (มี WordPress อยู่แล้วที่ root)\n"
+        return 1
+    fi
+
+    # ========== กรณี D: มี WP ที่ root + path อื่น → ลบ path อื่น + skip ==========
+    if [ "$HAS_ROOT" = true ] && [ "$HAS_WRONG" = true ]; then
+        log_warn "$DOMAIN — พบ WordPress หลายตำแหน่ง"
+        log_warn "  ✅ root: $ROOT_PATH (ID: $ROOT_ID) — เก็บไว้"
+
+        while read -r LINE; do
+            local WID
+            WID=$(echo "$LINE" | grep -oP '^\s+\K\d+')
+            local WPATH
+            WPATH=$(echo "$LINE" | grep -oP '/public_html/\S+')
+            [ -z "$WID" ] && continue
+
+            log_warn "  ❌ path ผิด: $WPATH (ID: $WID) — กำลังลบ..."
+            wp-toolkit --remove -instance-id "$WID" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                log_info "  ลบ ID $WID ($WPATH) สำเร็จ"
+            else
+                log_warn "  ลบ ID $WID ($WPATH) ไม่สำเร็จ"
+            fi
+        done <<< "$WRONG_LINES"
+
+        log_warn "  สถานะ: ลบ path ผิดแล้ว เหลือแต่ root — ไม่ติดตั้งซ้ำ"
+        log_warn "  ผลลัพธ์: ข้ามไป step ถัดไป"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (มี WP ที่ root + ลบ path ผิด ${WRONG_COUNT} ตัว)\n"
+        return 1
+    fi
+
+    # ========== กรณี C: มี WP ที่ path ผิดอย่างเดียว → ลบ + ติดตั้งใหม่ ==========
+    if [ "$HAS_ROOT" = false ] && [ "$HAS_WRONG" = true ]; then
+        log_warn "$DOMAIN — พบ WordPress ติดตั้งผิดตำแหน่ง"
+        log_warn "  ต้องติดตั้งที่ root ($ROOT_PATH) เท่านั้น"
+
+        while read -r LINE; do
+            local WID
+            WID=$(echo "$LINE" | grep -oP '^\s+\K\d+')
+            local WPATH
+            WPATH=$(echo "$LINE" | grep -oP '/public_html/\S+')
+            [ -z "$WID" ] && continue
+
+            log_warn "  ❌ path ผิด: $WPATH (ID: $WID) — กำลังลบ..."
+            wp-toolkit --remove -instance-id "$WID" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                log_info "  ลบ ID $WID ($WPATH) สำเร็จ"
+            else
+                log_warn "  ลบ ID $WID ($WPATH) ไม่สำเร็จ — ข้าม domain นี้"
+                SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (ลบ WP path ผิดไม่สำเร็จ)\n"
+                return 1
+            fi
+        done <<< "$WRONG_LINES"
+
+        log_info "$DOMAIN — ลบ path ผิดทั้งหมดสำเร็จ → ติดตั้งใหม่ที่ root"
+    fi
+
+    # ========== กรณี A: ไม่มี WP เลย → ติดตั้ง ==========
+    if [ "$HAS_ROOT" = false ] && [ "$HAS_WRONG" = false ]; then
+        log_info "3.1 ไม่พบ WordPress ใน $DOMAIN — พร้อมติดตั้ง"
+    fi
+
+    # --- 3.2 ติดตั้ง WordPress ที่ root เท่านั้น (-path "/") ---
+    log_step "3.2 ติดตั้ง WordPress ที่ root (-path \"/\")"
     local RESULT
     local EXIT_CODE
     start_spinner "WP Toolkit install $DOMAIN..."
@@ -441,7 +536,7 @@ step_install_wp() {
     if echo "$RESULT" | grep -qi "max.*database\|maximum.*database"; then
         log_error "$DOMAIN — MAX DATABASES REACHED"
         SUMMARY_FAIL="${SUMMARY_FAIL}  - $DOMAIN (max databases)\n"
-        return 2  # 2 = หยุด loop ทั้งหมด
+        return 2
     fi
 
     if [ $EXIT_CODE -ne 0 ]; then
@@ -450,18 +545,27 @@ step_install_wp() {
         return 1
     fi
 
-    # ยืนยัน WordPress ติดตั้งที่ root — ห้ามอยู่ที่ /wordpress/
-    if [ ! -f "$DOCROOT/wp-config.php" ]; then
-        log_warn "$DOMAIN — wp-config.php ไม่เจอที่ root (WP not at root)"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP not at root)\n"
+    # --- 3.3 ยืนยันหลัง install ว่าลงที่ root จริง (ผ่าน WP Toolkit) ---
+    log_step "3.3 ยืนยัน path ที่ติดตั้ง"
+    local VERIFY
+    VERIFY=$(wp-toolkit --list -domain-name "$DOMAIN" 2>/dev/null)
+    local INSTALL_PATH
+    INSTALL_PATH=$(echo "$VERIFY" | grep -oP '/public_html/\S+' | head -1)
+
+    if [ "$INSTALL_PATH" != "$ROOT_PATH" ]; then
+        log_warn "$DOMAIN — ติดตั้งผิด path: $INSTALL_PATH"
+        log_warn "  ต้องเป็น: $ROOT_PATH"
+        log_warn "  ผลลัพธ์: ข้าม domain นี้"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (ติดตั้งผิด path: $INSTALL_PATH)\n"
         return 1
     fi
 
-    log_info "WordPress + Vision Set สำเร็จ"
+    log_info "3.3 ยืนยัน path ถูกต้อง: $INSTALL_PATH"
+    log_info "WordPress + Vision Set สำเร็จ (root)"
     return 0
 }
 
-# ========================== STEP 4-5: SYMLINK + RESTORE =====================
+# ========================== STEP 4-5: COPY + RESTORE ========================
 
 step_restore() {
     local DOMAIN="$1"
@@ -469,6 +573,7 @@ step_restore() {
     local THEME="$3"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
     local WPRESS_FILE="${THEME}.wpress"
+    local BACKUPS_DIR="$DOCROOT/wp-content/ai1wm-backups"
 
     # เช็ค disk space ก่อน restore
     local DISK_NOW
@@ -479,27 +584,36 @@ step_restore() {
         return 2
     fi
 
-    # Step 4: Symlink
-    log_step "Step 4: Symlink .wpress"
-    mkdir -p "$DOCROOT/wp-content/ai1wm-backups"
-    chown "${CPUSER}:${CPUSER}" "$DOCROOT/wp-content/ai1wm-backups"
-    ln -sf "${TEMPLATE_DIR}/${WPRESS_FILE}" "$DOCROOT/wp-content/ai1wm-backups/"
+    # Step 4: Copy .wpress ไปที่ ai1wm-backups
+    log_step "Step 4: Copy .wpress → ai1wm-backups"
 
-    if [ ! -L "$DOCROOT/wp-content/ai1wm-backups/${WPRESS_FILE}" ]; then
-        log_warn "$DOMAIN — symlink สร้างไม่ได้"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (symlink failed)\n"
+    # สร้าง ai1wm-backups/ ถ้ายังไม่มี (เป็น user เพื่อ ownership ถูกต้อง)
+    if [ ! -d "$BACKUPS_DIR" ]; then
+        sudo -u "$CPUSER" mkdir -p "$BACKUPS_DIR"
+    fi
+
+    cp "${TEMPLATE_DIR}/${WPRESS_FILE}" "$BACKUPS_DIR/"
+    if [ $? -ne 0 ]; then
+        log_warn "$DOMAIN — copy .wpress ไม่สำเร็จ"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (copy wpress failed)\n"
         return 1
     fi
+    chown "${CPUSER}:${CPUSER}" "$BACKUPS_DIR/${WPRESS_FILE}"
+    log_info "Copy ${WPRESS_FILE} สำเร็จ"
 
     # Step 5: Restore
     # รอให้ WP-CLI เห็น AI1WM command หลัง WP Toolkit install
     sleep 5
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
+
     local RESULT
     local EXIT_CODE
-    RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" \
+    RESULT=$(timeout "$TIMEOUT_RESTORE" sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" \
         ai1wm restore "$WPRESS_FILE" --path="$DOCROOT" 2>&1)
     EXIT_CODE=$?
+
+    # ลบ .wpress ทุกไฟล์ทันทีหลัง restore (ไม่ว่าชื่ออะไร ไม่ว่าสำเร็จหรือไม่)
+    rm -f "$BACKUPS_DIR/"*.wpress 2>/dev/null
 
     if [ $EXIT_CODE -eq 124 ]; then
         log_warn "$DOMAIN — restore timeout ${TIMEOUT_RESTORE}s"
@@ -523,7 +637,7 @@ step_restore() {
     return 0
 }
 
-# ========================== STEP 6: CLEANUP =================================
+# ========================== STEP 6: CLEANUP + CONFIG ========================
 
 step_cleanup() {
     local DOMAIN="$1"
@@ -533,35 +647,30 @@ step_cleanup() {
     local CF_TOKEN="$5"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
-    log_step "Step 6: Cleanup"
+    log_step "Step 6: Cleanup + Config"
 
-    # 6.1 ลบ symlink + ai1wm-backups
-    rm -f "$DOCROOT/wp-content/ai1wm-backups/"*.wpress 2>/dev/null
-    rm -rf "$DOCROOT/wp-content/ai1wm-backups/" 2>/dev/null
-
-    # 6.2 ลบ plugins (hello, akismet, all-in-one-wp-migration)
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" plugin deactivate \
+    # 6.1 ลบ plugins (hello, akismet, all-in-one-wp-migration)
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" plugin deactivate \
         hello akismet all-in-one-wp-migration \
         --path="$DOCROOT" 2>/dev/null
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" plugin delete \
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" plugin delete \
         hello akismet all-in-one-wp-migration \
         --path="$DOCROOT" 2>/dev/null
-    log_info "6.2 ลบ plugins เสร็จ"
+    log_info "6.1 ลบ plugins เสร็จ"
 
-    # 6.3 ลบ default themes (เก็บ active + parent + ใหม่สุด)
+    # 6.2 ลบ default themes (เก็บ active + parent + ใหม่สุด)
     local ACTIVE_THEME
-    ACTIVE_THEME=$(sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" theme list \
+    ACTIVE_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
         --path="$DOCROOT" --status=active --field=name 2>/dev/null)
 
     local PARENT_THEME
-    PARENT_THEME=$(sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" theme list \
+    PARENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
         --path="$DOCROOT" --status=parent --field=name 2>/dev/null)
 
-    # หา default theme ใหม่สุด
     local LATEST_DEFAULT=""
     local LATEST_NUM=0
     local ALL_THEMES
-    ALL_THEMES=$(sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" theme list \
+    ALL_THEMES=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
         --path="$DOCROOT" --field=name 2>/dev/null)
 
     while read -r T; do
@@ -573,7 +682,6 @@ step_cleanup() {
         fi
     done <<< "$ALL_THEMES"
 
-    # ลบ default themes ที่ไม่ใช่ active + parent + ใหม่สุด
     local THEMES_TO_DELETE=""
     while read -r T; do
         local NUM
@@ -586,47 +694,46 @@ step_cleanup() {
     done <<< "$ALL_THEMES"
 
     if [ -n "$THEMES_TO_DELETE" ]; then
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" theme delete \
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme delete \
             $THEMES_TO_DELETE --path="$DOCROOT" 2>/dev/null
-        log_info "6.3 ลบ themes:$THEMES_TO_DELETE"
+        log_info "6.2 ลบ themes:$THEMES_TO_DELETE"
     else
-        log_info "6.3 ไม่มี theme ต้องลบ"
+        log_info "6.2 ไม่มี theme ต้องลบ"
     fi
 
-    # 6.4 Freemius clone resolve
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" config set \
+    # 6.3 Freemius clone resolve
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config set \
         FS__RESOLVE_CLONE_AS long_term_duplicate \
         --type=constant --path="$DOCROOT" 2>/dev/null
-    log_info "6.4 Freemius clone resolve เสร็จ"
+    log_info "6.3 Freemius clone resolve เสร็จ"
 
-    # 6.5 QUIC.cloud init + link
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-online init \
+    # 6.4 QUIC.cloud init + link
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
         --path="$DOCROOT" 2>/dev/null
-    log_info "6.5 QUIC.cloud init เสร็จ"
+    log_info "6.4 QUIC.cloud init เสร็จ"
 
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-online link \
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online link \
             --email="$QC_CF_EMAIL" \
             --api-key="$QC_TOKEN" \
             --path="$DOCROOT" 2>/dev/null
-        log_info "6.5 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
+        log_info "6.4 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
     elif [ -n "$QC_CF_EMAIL" ]; then
-        log_warn "6.5 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty for $QC_CF_EMAIL)\n"
+        log_warn "6.4 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty)\n"
     fi
 
-    # 6.6 Cloudflare API setup
+    # 6.5 Cloudflare API setup
     if [ -n "$CF_TOKEN" ] && [ -n "$QC_CF_EMAIL" ]; then
-        log_step "6.6 Cloudflare API setup"
+        log_step "6.5 Cloudflare API setup"
 
-        # ใส่ค่าทั้งหมด (ทับของเก่าทันที)
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare 1 --path="$DOCROOT" 2>/dev/null
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare_key "$CF_TOKEN" --path="$DOCROOT" 2>/dev/null
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare_email "$QC_CF_EMAIL" --path="$DOCROOT" 2>/dev/null
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare_name "$DOMAIN" --path="$DOCROOT" 2>/dev/null
-        sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare_clear 1 --path="$DOCROOT" 2>/dev/null
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare 1 --path="$DOCROOT" 2>/dev/null
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_key "$CF_TOKEN" --path="$DOCROOT" 2>/dev/null
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_email "$QC_CF_EMAIL" --path="$DOCROOT" 2>/dev/null
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_name "$DOMAIN" --path="$DOCROOT" 2>/dev/null
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_clear 1 --path="$DOCROOT" 2>/dev/null
 
-        # Fetch Zone ID จาก Cloudflare API → ใส่เข้า LiteSpeed
+        # Fetch Zone ID จาก Cloudflare API
         local ZONE_ID
         ZONE_ID=$(curl -s -X GET \
             "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
@@ -636,21 +743,20 @@ step_cleanup() {
             | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
         if [ -n "$ZONE_ID" ]; then
-            sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" eval \
+            # Zone ID เป็น protected field — ต้องใช้ wp eval เขียน DB ตรง
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval \
                 "update_option('litespeed.conf.cdn-cloudflare_zone', '$ZONE_ID');" \
                 --path="$DOCROOT" 2>/dev/null
-            log_info "6.6 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
+            log_info "6.5 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
         else
-            log_warn "6.6 Cloudflare setup แต่ Zone ID ไม่เจอ (domain อาจยังไม่อยู่ใน CF)"
+            log_warn "6.5 Cloudflare Zone ID ไม่เจอ"
             SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (CF Zone ID not found)\n"
         fi
     fi
 
-    # 6.7 Rank Math connect
-    # หลัง restore → connection data เก่า decrypt ไม่ได้ (wp-config keys เปลี่ยน)
-    # ลบเก่า + เขียนใหม่ด้วย RANKMATH_EMAIL/API_KEY จาก config section ด้านบน
-    log_step "6.7 Rank Math connect"
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" eval '
+    # 6.6 Rank Math connect
+    log_step "6.6 Rank Math connect"
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
         $data = [
             "username"  => "'"$RANKMATH_EMAIL"'",
@@ -664,8 +770,8 @@ step_cleanup() {
         $v = \RankMath\Admin\Admin_Helper::get_registration_data();
         echo $v ? "connected" : "failed";
     ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
-        && log_info "6.7 Rank Math connected ($RANKMATH_EMAIL)" \
-        || log_warn "6.7 Rank Math connect failed"
+        && log_info "6.6 Rank Math connected ($RANKMATH_EMAIL)" \
+        || log_warn "6.6 Rank Math connect failed"
 
     return 0
 }
@@ -679,11 +785,13 @@ step_flush_purge() {
 
     # Step 7: Flush permalink
     log_step "Step 7: Flush permalink"
-    sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" rewrite flush --hard \
+    local FLUSH_RC
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" rewrite flush --hard \
         --path="$DOCROOT" 2>/dev/null
-    if [ $? -ne 0 ]; then
+    FLUSH_RC=$?
+    if [ $FLUSH_RC -ne 0 ]; then
         log_warn "$DOMAIN — flush permalink failed"
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (flush permalink failed)\n"
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (flush failed)\n"
     else
         log_info "Flush permalink เสร็จ"
     fi
@@ -726,7 +834,7 @@ process_site() {
     # Step 1: Create Domain
     step_create_domain "$DOMAIN" "$CPUSER"
     local RC=$?
-    [ $RC -eq 2 ] && return 2  # หยุด loop
+    [ $RC -eq 2 ] && return 2
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
     # Step 2: Wait cPanel
@@ -736,16 +844,16 @@ process_site() {
     # Step 3: Install WordPress
     step_install_wp "$DOMAIN" "$CPUSER"
     RC=$?
-    [ $RC -eq 2 ] && return 2  # หยุด loop
+    [ $RC -eq 2 ] && return 2
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
-    # Step 4-5: Symlink + Restore
+    # Step 4-5: Copy + Restore
     step_restore "$DOMAIN" "$CPUSER" "$THEME"
     RC=$?
-    [ $RC -eq 2 ] && return 2  # หยุด loop
+    [ $RC -eq 2 ] && return 2
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
-    # Step 6: Cleanup
+    # Step 6: Cleanup + Config
     step_cleanup "$DOMAIN" "$CPUSER" "$QC_CF_EMAIL" "$QC_TOKEN" "$CF_TOKEN"
 
     # Step 7-8: Flush + Purge
@@ -832,24 +940,21 @@ $(echo -e "$SUMMARY_FAIL")"
 # ========================== MAIN ============================================
 
 main() {
-    # ตรวจ argument
     if [ -z "$1" ]; then
         echo "Usage: $0 /path/to/sites.csv"
         echo ""
         echo "CSV Format: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token"
-        echo "Example:    a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_token,cf_global_api_key"
+        echo "Example:    a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_token,cf_key"
         exit 1
     fi
 
     CSV_FILE="$1"
 
-    # ตรวจ root
     if [ "$(id -u)" -ne 0 ]; then
         echo "ต้องรันด้วย root"
         exit 1
     fi
 
-    # สร้าง log directory + file (เขียนทับ log วันเดียวกัน)
     mkdir -p "$LOG_DIR"
     LOG_FILE="${LOG_DIR}/${DATE_TAG}.log"
     echo "========================================" > "$LOG_FILE"
@@ -857,7 +962,6 @@ main() {
     echo "CSV: $CSV_FILE" >> "$LOG_FILE"
     echo "========================================" >> "$LOG_FILE"
 
-    # Pre-flight check
     preflight_check
     if [ $? -ne 0 ]; then
         log_error "Pre-flight check failed — ยกเลิก"
@@ -866,10 +970,8 @@ main() {
 
     # Main loop
     while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
-        # ข้ามบรรทัดว่าง
         [ -z "$DOMAIN" ] && continue
 
-        # trim whitespace
         DOMAIN=$(echo "$DOMAIN" | xargs)
         CPUSER=$(echo "$CPUSER" | xargs)
         THEME=$(echo "$THEME" | xargs)
@@ -888,7 +990,6 @@ main() {
 
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
 
-    # สรุป
     show_summary
 
     echo "End: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
