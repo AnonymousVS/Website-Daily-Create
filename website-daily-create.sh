@@ -844,6 +844,16 @@ step_purge_flush() {
     log_step "Step 7: LiteSpeed purge"
     rm -rf "$DOCROOT/wp-content/litespeed/" 2>/dev/null
     rm -rf "/home/${CPUSER}/lscache/" 2>/dev/null
+
+    # ล้าง LiteSpeed avatar cache table (ป้องกัน Duplicate entry error จาก .wpress เก่า)
+    local TABLE_PREFIX
+    TABLE_PREFIX=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config get table_prefix \
+        --path="$DOCROOT" 2>/dev/null)
+    if [ -n "$TABLE_PREFIX" ]; then
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" db query \
+            "TRUNCATE TABLE ${TABLE_PREFIX}litespeed_avatar;" \
+            --path="$DOCROOT" 2>/dev/null
+    fi
     log_info "LiteSpeed purge เสร็จ"
 
     # Step 8: Flush permalink (ขั้นตอนสุดท้าย — เหมือนกด Save Changes ใน Dashboard)
