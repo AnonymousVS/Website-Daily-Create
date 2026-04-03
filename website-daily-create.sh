@@ -332,7 +332,7 @@ preflight_check() {
         fi
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
     if [ $EXISTING_COUNT -gt 0 ]; then
-        log_warn "Domains ที่มีอยู่แล้ว ($EXISTING_COUNT เว็บ — จะข้าม):"
+        log_warn "Domains ที่มีอยู่แล้ว ($EXISTING_COUNT เว็บ — ข้าม Step 1-2 ไป Step 3):"
         echo -e "$EXISTING_DOMAINS"
     fi
 
@@ -340,9 +340,9 @@ preflight_check() {
     echo ""
     echo "========================================"
     local READY_COUNT=$((COUNT_TOTAL - EXISTING_COUNT))
-    echo -e "  ${GREEN}✅ พร้อมสร้าง: $READY_COUNT เว็บ${NC}"
+    echo -e "  ${GREEN}✅ สร้างใหม่: $READY_COUNT เว็บ${NC}"
     if [ $EXISTING_COUNT -gt 0 ]; then
-        echo -e "  ${YELLOW}⚠️ ข้าม (มีอยู่แล้ว): $EXISTING_COUNT เว็บ${NC}"
+        echo -e "  ${YELLOW}⚠️ มีอยู่แล้ว (ข้าม Step 1-2): $EXISTING_COUNT เว็บ${NC}"
     fi
     echo "  Server: $(hostname)"
     echo "  PHP: $PHP_BIN"
@@ -898,27 +898,23 @@ process_site() {
     echo "  cPanel: $CPUSER | Theme: $THEME"
     echo "════════════════════════════════════════"
 
-    # ข้าม domain ที่มีอยู่แล้ว
+    # Step 1-2: Create Domain (ข้ามถ้ามีอยู่แล้ว)
     if grep -q "^${DOMAIN}:" /etc/userdatadomains 2>/dev/null; then
-        log_warn "$DOMAIN — มีอยู่แล้ว ข้าม"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (already exists)\n"
-        COUNT_SKIP=$((COUNT_SKIP+1))
-        return 0
+        log_info "$DOMAIN — มีอยู่แล้ว ข้าม Step 1-2 → ไป Step 3"
+    else
+        step_create_domain "$DOMAIN" "$CPUSER"
+        local RC=$?
+        [ $RC -eq 2 ] && return 2
+        [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
+
+        # Step 2: Wait cPanel
+        step_wait_cpanel "$DOMAIN" "$CPUSER"
+        [ $? -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
     fi
-
-    # Step 1: Create Domain
-    step_create_domain "$DOMAIN" "$CPUSER"
-    local RC=$?
-    [ $RC -eq 2 ] && return 2
-    [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
-
-    # Step 2: Wait cPanel
-    step_wait_cpanel "$DOMAIN" "$CPUSER"
-    [ $? -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
     # Step 3: Install WordPress
     step_install_wp "$DOMAIN" "$CPUSER"
-    RC=$?
+    local RC=$?
     [ $RC -eq 2 ] && return 2
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
