@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.3.0
+# Version: 2.3.1
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.3.0"
+VERSION="2.3.1"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -693,11 +693,15 @@ step_restore() {
     log_step "5.2 แก้ Font CSS URL"
     local FONT_CSS="$DOCROOT/wp-content/uploads/blocksy/css/global.css"
     if [ -f "$FONT_CSS" ]; then
-        if grep -q "theme-black.store" "$FONT_CSS" 2>/dev/null; then
-            sed -i "s|https://theme-black.store|https://$DOMAIN|g" "$FONT_CSS"
-            log_info "5.2 Font CSS URL แก้จาก theme-black.store → $DOMAIN"
+        local OLD_DOMAIN
+        OLD_DOMAIN=$(grep -oP 'https://\K[^/]+' "$FONT_CSS" | head -1)
+        if [ -n "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" != "$DOMAIN" ]; then
+            sed -i "s|https://$OLD_DOMAIN|https://$DOMAIN|g" "$FONT_CSS"
+            log_info "5.2 Font CSS URL แก้จาก $OLD_DOMAIN → $DOMAIN"
+        elif [ -z "$OLD_DOMAIN" ]; then
+            log_info "5.2 ไม่พบ URL ใน Font CSS (ข้าม)"
         else
-            log_info "5.2 Font CSS URL ถูกต้องแล้ว"
+            log_info "5.2 Font CSS URL ถูกต้องแล้ว ($DOMAIN)"
         fi
     else
         log_info "5.2 ไม่มี Blocksy font CSS (ข้าม)"
