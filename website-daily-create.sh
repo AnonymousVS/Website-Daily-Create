@@ -146,19 +146,39 @@ find_vision_set_id() {
     echo "$ID"
 }
 
-# แปลงชื่อ default theme เป็นตัวเลข
+# แปลงชื่อ default theme เป็นตัวเลข (รองรับถึงปี 2050)
 theme_to_num() {
     case "$1" in
-        twentytwentyone)   echo 21;;
-        twentytwentytwo)   echo 22;;
-        twentytwentythree) echo 23;;
-        twentytwentyfour)  echo 24;;
-        twentytwentyfive)  echo 25;;
-        twentytwentysix)   echo 26;;
-        twentytwentyseven) echo 27;;
-        twentytwentyeight) echo 28;;
-        twentytwentynine)  echo 29;;
-        twentythirty)      echo 30;;
+        twentytwentyone)    echo 21;;
+        twentytwentytwo)    echo 22;;
+        twentytwentythree)  echo 23;;
+        twentytwentyfour)   echo 24;;
+        twentytwentyfive)   echo 25;;
+        twentytwentysix)    echo 26;;
+        twentytwentyseven)  echo 27;;
+        twentytwentyeight)  echo 28;;
+        twentytwentynine)   echo 29;;
+        twentythirty)       echo 30;;
+        twentythirtyone)    echo 31;;
+        twentythirtytwo)    echo 32;;
+        twentythirtythree)  echo 33;;
+        twentythirtyfour)   echo 34;;
+        twentythirtyfive)   echo 35;;
+        twentythirtysix)    echo 36;;
+        twentythirtyseven)  echo 37;;
+        twentythirtyeight)  echo 38;;
+        twentythirtynine)   echo 39;;
+        twentyforty)        echo 40;;
+        twentyfortyone)     echo 41;;
+        twentyfortytwo)     echo 42;;
+        twentyfortythree)   echo 43;;
+        twentyfortyfour)    echo 44;;
+        twentyfortyfive)    echo 45;;
+        twentyfortysix)     echo 46;;
+        twentyfortyseven)   echo 47;;
+        twentyfortyeight)   echo 48;;
+        twentyfortynine)    echo 49;;
+        twentyfifty)        echo 50;;
         *) echo 0;;
     esac
 }
