@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.4.0
+# Version: 2.5.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.4.0"
+VERSION="2.5.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -651,48 +651,6 @@ step_restore() {
         SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (restore result unclear)\n"
     fi
 
-    # --- 5.1 ยืนยัน + แก้ Active Theme หลัง Restore ---
-    log_step "5.1 ยืนยัน Active Theme"
-    local CURRENT_THEME
-    CURRENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-        --path="$DOCROOT" --status=active --field=name 2>/dev/null)
-
-    if [ "$CURRENT_THEME" = "$ACTIVE_THEME" ]; then
-        log_info "5.1 Theme ถูกต้อง: $ACTIVE_THEME"
-    elif [ -z "$CURRENT_THEME" ]; then
-        log_warn "5.1 ไม่พบ active theme → activate $ACTIVE_THEME"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
-            --path="$DOCROOT" 2>/dev/null
-    else
-        log_warn "5.1 Theme active: $CURRENT_THEME (ควรเป็น $ACTIVE_THEME) → กำลัง activate..."
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
-            --path="$DOCROOT" 2>/dev/null
-        if [ $? -eq 0 ]; then
-            log_info "5.1 Activate $ACTIVE_THEME สำเร็จ"
-        else
-            log_warn "5.1 Activate $ACTIVE_THEME ไม่สำเร็จ"
-            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (activate $ACTIVE_THEME failed)\n"
-        fi
-    fi
-
-    # --- 5.2 แก้ Font CSS URL เก่า (AI1WM ไม่แก้ URL ในไฟล์ CSS) ---
-    log_step "5.2 แก้ Font CSS URL"
-    local FONT_CSS="$DOCROOT/wp-content/uploads/blocksy/css/global.css"
-    if [ -f "$FONT_CSS" ]; then
-        local OLD_DOMAIN
-        OLD_DOMAIN=$(grep -oP 'https://\K[^/]+' "$FONT_CSS" | head -1)
-        if [ -n "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" != "$DOMAIN" ]; then
-            sed -i "s|https://$OLD_DOMAIN|https://$DOMAIN|g" "$FONT_CSS"
-            log_info "5.2 Font CSS URL แก้จาก $OLD_DOMAIN → $DOMAIN"
-        elif [ -z "$OLD_DOMAIN" ]; then
-            log_info "5.2 ไม่พบ URL ใน Font CSS (ข้าม)"
-        else
-            log_info "5.2 Font CSS URL ถูกต้องแล้ว ($DOMAIN)"
-        fi
-    else
-        log_info "5.2 ไม่มี Blocksy font CSS (ข้าม)"
-    fi
-
     return 0
 }
 
@@ -755,31 +713,63 @@ step_cleanup() {
         log_info "6.2 ไม่มี theme ต้องลบ"
     fi
 
-    # 6.3 Freemius clone resolve
+    # 6.3 Activate theme (หลังลบ plugins/themes — อาจ reset theme ระหว่าง 6.1-6.2)
+    log_step "6.3 Activate $ACTIVE_THEME"
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
+        --path="$DOCROOT" 2>/dev/null
+    local CURRENT_THEME_CHECK
+    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+        --path="$DOCROOT" --status=active --field=name 2>/dev/null)
+    if [ "$CURRENT_THEME_CHECK" = "$ACTIVE_THEME" ]; then
+        log_info "6.3 Theme active: $ACTIVE_THEME ✅"
+    else
+        log_warn "6.3 Theme active: $CURRENT_THEME_CHECK (ควรเป็น $ACTIVE_THEME)"
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (activate $ACTIVE_THEME failed)\n"
+    fi
+
+    # 6.4 แก้ Font CSS URL เก่า (AI1WM ไม่แก้ URL ในไฟล์ CSS)
+    log_step "6.4 แก้ Font CSS URL"
+    local FONT_CSS="$DOCROOT/wp-content/uploads/blocksy/css/global.css"
+    if [ -f "$FONT_CSS" ]; then
+        local OLD_DOMAIN
+        OLD_DOMAIN=$(grep -oP 'https://\K[^/]+' "$FONT_CSS" | head -1)
+        if [ -n "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" != "$DOMAIN" ]; then
+            sed -i "s|https://$OLD_DOMAIN|https://$DOMAIN|g" "$FONT_CSS"
+            log_info "6.4 Font CSS URL แก้จาก $OLD_DOMAIN → $DOMAIN"
+        elif [ -z "$OLD_DOMAIN" ]; then
+            log_info "6.4 ไม่พบ URL ใน Font CSS (ข้าม)"
+        else
+            log_info "6.4 Font CSS URL ถูกต้องแล้ว ($DOMAIN)"
+        fi
+    else
+        log_info "6.4 ไม่มี Blocksy font CSS (ข้าม)"
+    fi
+
+    # 6.5 Freemius clone resolve
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config set \
         FS__RESOLVE_CLONE_AS long_term_duplicate \
         --type=constant --path="$DOCROOT" 2>/dev/null
-    log_info "6.3 Freemius clone resolve เสร็จ"
+    log_info "6.5 Freemius clone resolve เสร็จ"
 
-    # 6.4 QUIC.cloud init + link
+    # 6.6 QUIC.cloud init + link
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
         --path="$DOCROOT" 2>/dev/null
-    log_info "6.4 QUIC.cloud init เสร็จ"
+    log_info "6.6 QUIC.cloud init เสร็จ"
 
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online link \
             --email="$QC_CF_EMAIL" \
             --api-key="$QC_TOKEN" \
             --path="$DOCROOT" 2>/dev/null
-        log_info "6.4 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
+        log_info "6.6 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
     elif [ -n "$QC_CF_EMAIL" ]; then
-        log_warn "6.4 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
+        log_warn "6.6 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
         SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty)\n"
     fi
 
-    # 6.5 Cloudflare API setup
+    # 6.7 Cloudflare API setup
     if [ -n "$CF_TOKEN" ] && [ -n "$QC_CF_EMAIL" ]; then
-        log_step "6.5 Cloudflare API setup"
+        log_step "6.7 Cloudflare API setup"
 
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare 1 --path="$DOCROOT" 2>/dev/null
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_key "$CF_TOKEN" --path="$DOCROOT" 2>/dev/null
@@ -801,15 +791,15 @@ step_cleanup() {
             sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval \
                 "update_option('litespeed.conf.cdn-cloudflare_zone', '$ZONE_ID');" \
                 --path="$DOCROOT" 2>/dev/null
-            log_info "6.5 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
+            log_info "6.7 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
         else
-            log_warn "6.5 Cloudflare Zone ID ไม่เจอ"
+            log_warn "6.7 Cloudflare Zone ID ไม่เจอ"
             SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (CF Zone ID not found)\n"
         fi
     fi
 
-    # 6.6 Rank Math connect
-    log_step "6.6 Rank Math connect"
+    # 6.8 Rank Math connect
+    log_step "6.8 Rank Math connect"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
         delete_option("rank_math_registration_data");
@@ -826,18 +816,18 @@ step_cleanup() {
         $v = \RankMath\Admin\Admin_Helper::get_registration_data();
         echo $v ? "connected" : "failed";
     ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
-        && log_info "6.6 Rank Math connected ($RANKMATH_EMAIL)" \
-        || log_warn "6.6 Rank Math connect failed"
+        && log_info "6.8 Rank Math connected ($RANKMATH_EMAIL)" \
+        || log_warn "6.8 Rank Math connect failed"
 
-    # 6.7 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
-    log_step "6.7 ลบ Rank Math sitemap cache"
+    # 6.9 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
+    log_step "6.9 ลบ Rank Math sitemap cache"
     local SITEMAP_COUNT
     SITEMAP_COUNT=$(find "$DOCROOT/wp-content/uploads/rank-math/" -name "*.xml" 2>/dev/null | wc -l)
     if [ "$SITEMAP_COUNT" -gt 0 ]; then
         rm -f "$DOCROOT/wp-content/uploads/rank-math/"*.xml 2>/dev/null
-        log_info "6.7 ลบ sitemap cache $SITEMAP_COUNT ไฟล์ (Rank Math จะสร้างใหม่)"
+        log_info "6.9 ลบ sitemap cache $SITEMAP_COUNT ไฟล์ (Rank Math จะสร้างใหม่)"
     else
-        log_info "6.7 ไม่มี sitemap cache (ข้าม)"
+        log_info "6.9 ไม่มี sitemap cache (ข้าม)"
     fi
 
     return 0
