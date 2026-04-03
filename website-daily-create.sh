@@ -111,10 +111,18 @@ send_telegram() {
     fi
 }
 
-# หา PHP CLI อัตโนมัติ (ตัวใหม่สุดบน server)
+# หา PHP CLI อัตโนมัติ (sync กับ WHM default, fallback รองลงมา 1 ตัว)
 find_php_cli() {
     local CLI
-    CLI=$(ls -d /opt/cpanel/ea-php*/root/usr/bin/php 2>/dev/null | sort -V | tail -1)
+    # ดึง default PHP จาก WHM MultiPHP Manager
+    local DEFAULT_PHP
+    DEFAULT_PHP=$(whmapi1 php_get_system_default_version 2>/dev/null | grep -o 'ea-php[0-9]*')
+    if [ -n "$DEFAULT_PHP" ] && [ -f "/opt/cpanel/${DEFAULT_PHP}/root/usr/bin/php" ]; then
+        CLI="/opt/cpanel/${DEFAULT_PHP}/root/usr/bin/php"
+    else
+        # fallback: ใช้รองลงมา 1 ตัว (ไม่ใช่ตัวใหม่สุด เพื่อหลีกเลี่ยงปัญหา compatibility)
+        CLI=$(ls -d /opt/cpanel/ea-php*/root/usr/bin/php 2>/dev/null | sort -V | tail -2 | head -1)
+    fi
     if [ -z "$CLI" ]; then
         return 1
     fi
