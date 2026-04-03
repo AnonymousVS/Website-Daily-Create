@@ -4,7 +4,9 @@ Bulk WordPress Site Creation Pipeline — สร้างเว็บ WordPress 
 
 ## คำสั่งรัน
 ```bash
-curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
+curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/server-config.conf -o /tmp/server-config.conf && \
+curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && \
+bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
 ```
 
 ```bash
