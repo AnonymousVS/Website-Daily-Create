@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 1.2.0
+# Version: 1.6.1
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-VERSION="1.2.0"
+VERSION="1.6.1"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -423,11 +423,13 @@ step_install_wp() {
     log_step "Step 3: ติดตั้ง WordPress + Vision Set"
 
     local RESULT
+    local EXIT_CODE
     start_spinner "WP Toolkit install $DOMAIN..."
     RESULT=$(timeout "$TIMEOUT_WPTOOLKIT" wp-toolkit --install \
         -domain-name "$DOMAIN" \
+        -path "/" \
         -set-id "$VISION_SET_ID" 2>&1)
-    local EXIT_CODE=$?
+    EXIT_CODE=$?
     stop_spinner
 
     if [ $EXIT_CODE -eq 124 ]; then
@@ -445,6 +447,13 @@ step_install_wp() {
     if [ $EXIT_CODE -ne 0 ]; then
         log_warn "$DOMAIN — WP Toolkit install failed (exit $EXIT_CODE)"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP Toolkit failed)\n"
+        return 1
+    fi
+
+    # ยืนยัน WordPress ติดตั้งที่ root — ห้ามอยู่ที่ /wordpress/
+    if [ ! -f "$DOCROOT/wp-config.php" ]; then
+        log_warn "$DOMAIN — wp-config.php ไม่เจอที่ root (WP not at root)"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (WP not at root)\n"
         return 1
     fi
 
@@ -483,6 +492,8 @@ step_restore() {
     fi
 
     # Step 5: Restore
+    # รอให้ WP-CLI เห็น AI1WM command หลัง WP Toolkit install
+    sleep 5
     log_step "Step 5: AI1WM Restore ($WPRESS_FILE)"
     local RESULT
     local EXIT_CODE
@@ -625,7 +636,9 @@ step_cleanup() {
             | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
         if [ -n "$ZONE_ID" ]; then
-            sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" litespeed-option set cdn-cloudflare_zone "$ZONE_ID" --path="$DOCROOT" 2>/dev/null
+            sudo -u "$CPUSER" "$PHP_CLI" "$WP_CLI" eval \
+                "update_option('litespeed.conf.cdn-cloudflare_zone', '$ZONE_ID');" \
+                --path="$DOCROOT" 2>/dev/null
             log_info "6.6 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
         else
             log_warn "6.6 Cloudflare setup แต่ Zone ID ไม่เจอ (domain อาจยังไม่อยู่ใน CF)"
