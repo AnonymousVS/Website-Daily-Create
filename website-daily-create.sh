@@ -1,12 +1,12 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.3.1
+# Version: 2.4.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
-# CSV Format: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token
-# Example:    a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_token,cf_global_api_key
+# CSV Format: domain,theme
+# Example:    a1.com,theme-black.store
 # ============================================================================
 # v2.0.0 Changes:
 #   - Copy method แทน symlink (ไม่ต้อง symlink)
@@ -19,17 +19,13 @@
 
 set -o pipefail
 
-VERSION="2.3.1"
+VERSION="2.4.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
 TEMPLATE_DIR="/usr/local/share/ai1wm-templates"  # .wpress template files
 LOG_DIR="/var/log/website-daily-create"
 WP_CLI="/usr/local/bin/wp"
-
-# --- Telegram Notification ---
-TELEGRAM_BOT_TOKEN="8601090793:AAHNfwBd5Vf80Hq59NqQ5ZIwPmbYcqRdir4"
-TELEGRAM_CHAT_ID="-5223351518"
 
 # --- Limits ---
 DISK_MIN_START_GB=30           # Pre-flight: disk ต้องมีอย่างน้อย (GB)
@@ -38,13 +34,14 @@ WAIT_CPANEL_MAX=30             # รอ cPanel register สูงสุด (ว�
 TIMEOUT_WPTOOLKIT=120          # timeout WP Toolkit install (วินาที)
 TIMEOUT_RESTORE=600            # timeout AI1WM restore (วินาที)
 
-# --- Rank Math SEO (ใช้ค่าเดียวกันทุกเว็บ ไม่ต้องใส่ใน CSV) ---
-RANKMATH_EMAIL="ufavisionseoteam@gmail.com"
-RANKMATH_API_KEY="03cefb18bb49a91d3c619d2906b43db8"
-RANKMATH_PLAN="pro"
-
 # --- Active Theme (theme ที่ .wpress template ใช้) ---
 ACTIVE_THEME="blocksy-child"
+
+# --- Server Config (credentials อ่านจากไฟล์แยก) ---
+# ค้นหา server-config.conf ตามลำดับ:
+#   1. อยู่ข้างๆ CSV file ที่ส่งมา
+#   2. /usr/local/etc/website-daily-create/server-config.conf
+#   3. ถ้าไม่เจอ → หยุดทันที
 # ============================================================================
 
 # ========================== COLORS ==========================================
@@ -211,9 +208,9 @@ preflight_check() {
         return 1
     fi
     local BAD_LINES
-    BAD_LINES=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | awk -F',' 'NF!=6 && NF!=0 {print NR+1": "$0}')
+    BAD_LINES=$(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2 | awk -F',' 'NF!=2 && NF!=0 {print NR+1": "$0}')
     if [ -n "$BAD_LINES" ]; then
-        log_error "CSV format ผิด (ต้องมี 6 columns):"
+        log_error "CSV format ผิด (ต้องมี 2 columns: domain,theme):"
         echo "$BAD_LINES"
         return 1
     fi
@@ -274,19 +271,13 @@ preflight_check() {
     fi
     log_info "Disk free: ${DISK_FREE}GB"
 
-    # 6. cPanel users
-    log_step "6. ตรวจสอบ cPanel users..."
-    local MISSING_USERS=""
-    while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
-        if [ ! -f "/var/cpanel/users/$CPUSER" ]; then
-            MISSING_USERS="$MISSING_USERS $CPUSER"
-        fi
-    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
-    if [ -n "$MISSING_USERS" ]; then
-        log_error "cPanel users ไม่มี:$MISSING_USERS"
+    # 6. cPanel user
+    log_step "6. ตรวจสอบ cPanel user..."
+    if [ ! -f "/var/cpanel/users/$CPANEL_USER" ]; then
+        log_error "cPanel user ไม่มี: $CPANEL_USER"
         return 1
     fi
-    log_info "cPanel users OK"
+    log_info "cPanel user OK: $CPANEL_USER"
 
     # 7. .wpress templates
     log_step "7. ตรวจสอบ .wpress templates..."
@@ -295,7 +286,7 @@ preflight_check() {
         return 1
     fi
     local MISSING_TEMPLATES=""
-    while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
+    while IFS=',' read -r DOMAIN THEME; do
         if [ ! -f "${TEMPLATE_DIR}/${THEME}.wpress" ]; then
             MISSING_TEMPLATES="$MISSING_TEMPLATES ${THEME}.wpress"
         fi
@@ -308,17 +299,12 @@ preflight_check() {
 
     # 8. QUIC.cloud credentials
     log_step "8. ตรวจสอบ QUIC.cloud credentials..."
-    local MISSING_QUIC=""
-    while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
-        if [ -n "$QC_CF_EMAIL" ] && [ -z "$QC_TOKEN" ]; then
-            MISSING_QUIC="$MISSING_QUIC  - $DOMAIN ($QC_CF_EMAIL ไม่มี token)\n"
-        fi
-    done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
-    if [ -n "$MISSING_QUIC" ]; then
-        log_warn "QUIC.cloud token ไม่ครบ (จะข้าม link):"
-        echo -e "$MISSING_QUIC"
+    if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
+        log_info "QUIC.cloud credentials OK ($QC_CF_EMAIL)"
+    elif [ -n "$QC_CF_EMAIL" ] && [ -z "$QC_TOKEN" ]; then
+        log_warn "QUIC.cloud token ว่าง สำหรับ $QC_CF_EMAIL (จะข้าม link)"
     else
-        log_info "QUIC.cloud credentials OK"
+        log_warn "QUIC.cloud email ไม่ได้ตั้ง (จะข้าม)"
     fi
 
     # 9. Telegram
@@ -339,7 +325,7 @@ preflight_check() {
     log_step "10. ตรวจสอบ domains ที่มีอยู่แล้ว..."
     local EXISTING_DOMAINS=""
     local EXISTING_COUNT=0
-    while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
+    while IFS=',' read -r DOMAIN THEME; do
         if grep -q "^${DOMAIN}:" /etc/userdatadomains 2>/dev/null; then
             EXISTING_DOMAINS="$EXISTING_DOMAINS  - $DOMAIN\n"
             EXISTING_COUNT=$((EXISTING_COUNT+1))
@@ -713,9 +699,6 @@ step_restore() {
 step_cleanup() {
     local DOMAIN="$1"
     local CPUSER="$2"
-    local QC_CF_EMAIL="$3"
-    local QC_TOKEN="$4"
-    local CF_TOKEN="$5"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
     log_step "Step 6: Cleanup + Config"
@@ -898,11 +881,8 @@ step_purge_flush() {
 
 process_site() {
     local DOMAIN="$1"
-    local CPUSER="$2"
-    local THEME="$3"
-    local QC_CF_EMAIL="$4"
-    local QC_TOKEN="$5"
-    local CF_TOKEN="$6"
+    local THEME="$2"
+    local CPUSER="$CPANEL_USER"
     local SITE_START
     SITE_START=$(date +%s)
 
@@ -943,7 +923,7 @@ process_site() {
     [ $RC -ne 0 ] && { COUNT_SKIP=$((COUNT_SKIP+1)); return 0; }
 
     # Step 6: Cleanup + Config
-    step_cleanup "$DOMAIN" "$CPUSER" "$QC_CF_EMAIL" "$QC_TOKEN" "$CF_TOKEN"
+    step_cleanup "$DOMAIN" "$CPUSER"
 
     # Step 7-8: Purge + Flush (flush เป็นขั้นตอนสุดท้าย)
     step_purge_flush "$DOMAIN" "$CPUSER"
@@ -1032,8 +1012,8 @@ main() {
     if [ -z "$1" ]; then
         echo "Usage: $0 /path/to/sites.csv"
         echo ""
-        echo "CSV Format: domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token"
-        echo "Example:    a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_token,cf_key"
+        echo "CSV Format: domain,theme"
+        echo "Example:    a1.com,theme-black.store"
         exit 1
     fi
 
@@ -1051,6 +1031,34 @@ main() {
     echo "CSV: $CSV_FILE" >> "$LOG_FILE"
     echo "========================================" >> "$LOG_FILE"
 
+    # โหลด server-config.conf (credentials)
+    local CONFIG_DIR
+    CONFIG_DIR=$(dirname "$CSV_FILE")
+    local SERVER_CONFIG=""
+
+    if [ -f "${CONFIG_DIR}/server-config.conf" ]; then
+        SERVER_CONFIG="${CONFIG_DIR}/server-config.conf"
+    elif [ -f "/usr/local/etc/website-daily-create/server-config.conf" ]; then
+        SERVER_CONFIG="/usr/local/etc/website-daily-create/server-config.conf"
+    fi
+
+    if [ -z "$SERVER_CONFIG" ]; then
+        echo -e "${RED}[❌] server-config.conf ไม่เจอ${NC}"
+        echo "  ค้นหาที่:"
+        echo "    1. ${CONFIG_DIR}/server-config.conf"
+        echo "    2. /usr/local/etc/website-daily-create/server-config.conf"
+        exit 1
+    fi
+
+    source "$SERVER_CONFIG"
+    echo "Config: $SERVER_CONFIG" >> "$LOG_FILE"
+
+    # ตรวจสอบตัวแปรสำคัญจาก server-config.conf
+    if [ -z "$CPANEL_USER" ]; then
+        echo -e "${RED}[❌] CPANEL_USER ไม่ได้ตั้งค่าใน server-config.conf${NC}"
+        exit 1
+    fi
+
     preflight_check
     if [ $? -ne 0 ]; then
         log_error "Pre-flight check failed — ยกเลิก"
@@ -1058,17 +1066,13 @@ main() {
     fi
 
     # Main loop
-    while IFS=',' read -r DOMAIN CPUSER THEME QC_CF_EMAIL QC_TOKEN CF_TOKEN; do
+    while IFS=',' read -r DOMAIN THEME; do
         [ -z "$DOMAIN" ] && continue
 
         DOMAIN=$(echo "$DOMAIN" | xargs)
-        CPUSER=$(echo "$CPUSER" | xargs)
         THEME=$(echo "$THEME" | xargs)
-        QC_CF_EMAIL=$(echo "$QC_CF_EMAIL" | xargs)
-        QC_TOKEN=$(echo "$QC_TOKEN" | xargs)
-        CF_TOKEN=$(echo "$CF_TOKEN" | xargs)
 
-        process_site "$DOMAIN" "$CPUSER" "$THEME" "$QC_CF_EMAIL" "$QC_TOKEN" "$CF_TOKEN"
+        process_site "$DOMAIN" "$THEME"
         local RC=$?
 
         if [ $RC -eq 2 ]; then
