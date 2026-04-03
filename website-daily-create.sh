@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.1.0
+# Version: 2.3.0
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.1.0"
+VERSION="2.3.0"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -42,6 +42,9 @@ TIMEOUT_RESTORE=600            # timeout AI1WM restore (วินาที)
 RANKMATH_EMAIL="ufavisionseoteam@gmail.com"
 RANKMATH_API_KEY="03cefb18bb49a91d3c619d2906b43db8"
 RANKMATH_PLAN="pro"
+
+# --- Active Theme (theme ที่ .wpress template ใช้) ---
+ACTIVE_THEME="blocksy-child"
 # ============================================================================
 
 # ========================== COLORS ==========================================
@@ -637,15 +640,51 @@ step_restore() {
 
     if echo "$RESULT" | grep -qi "Restore complete"; then
         log_info "Restore สำเร็จ"
-        return 0
+    else
+        log_warn "$DOMAIN — restore result unclear"
+        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (restore result unclear)\n"
     fi
 
-    log_warn "$DOMAIN — restore result unclear"
-    SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (restore result unclear)\n"
+    # --- 5.1 ยืนยัน + แก้ Active Theme หลัง Restore ---
+    log_step "5.1 ยืนยัน Active Theme"
+    local CURRENT_THEME
+    CURRENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+        --path="$DOCROOT" --status=active --field=name 2>/dev/null)
+
+    if [ "$CURRENT_THEME" = "$ACTIVE_THEME" ]; then
+        log_info "5.1 Theme ถูกต้อง: $ACTIVE_THEME"
+    elif [ -z "$CURRENT_THEME" ]; then
+        log_warn "5.1 ไม่พบ active theme → activate $ACTIVE_THEME"
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
+            --path="$DOCROOT" 2>/dev/null
+    else
+        log_warn "5.1 Theme active: $CURRENT_THEME (ควรเป็น $ACTIVE_THEME) → กำลัง activate..."
+        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
+            --path="$DOCROOT" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            log_info "5.1 Activate $ACTIVE_THEME สำเร็จ"
+        else
+            log_warn "5.1 Activate $ACTIVE_THEME ไม่สำเร็จ"
+            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (activate $ACTIVE_THEME failed)\n"
+        fi
+    fi
+
+    # --- 5.2 แก้ Font CSS URL เก่า (AI1WM ไม่แก้ URL ในไฟล์ CSS) ---
+    log_step "5.2 แก้ Font CSS URL"
+    local FONT_CSS="$DOCROOT/wp-content/uploads/blocksy/css/global.css"
+    if [ -f "$FONT_CSS" ]; then
+        if grep -q "theme-black.store" "$FONT_CSS" 2>/dev/null; then
+            sed -i "s|https://theme-black.store|https://$DOMAIN|g" "$FONT_CSS"
+            log_info "5.2 Font CSS URL แก้จาก theme-black.store → $DOMAIN"
+        else
+            log_info "5.2 Font CSS URL ถูกต้องแล้ว"
+        fi
+    else
+        log_info "5.2 ไม่มี Blocksy font CSS (ข้าม)"
+    fi
+
     return 0
 }
-
-# ========================== STEP 6: CLEANUP + CONFIG ========================
 
 step_cleanup() {
     local DOMAIN="$1"
@@ -667,8 +706,8 @@ step_cleanup() {
     log_info "6.1 ลบ plugins เสร็จ"
 
     # 6.2 ลบ default themes (เก็บ active + parent + ใหม่สุด)
-    local ACTIVE_THEME
-    ACTIVE_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
+    local CURRENT_ACTIVE
+    CURRENT_ACTIVE=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
         --path="$DOCROOT" --status=active --field=name 2>/dev/null)
 
     local PARENT_THEME
@@ -695,7 +734,7 @@ step_cleanup() {
         local NUM
         NUM=$(theme_to_num "$T")
         if [ "$NUM" -gt 0 ]; then
-            if [ "$T" != "$ACTIVE_THEME" ] && [ "$T" != "$PARENT_THEME" ] && [ "$T" != "$LATEST_DEFAULT" ]; then
+            if [ "$T" != "$CURRENT_ACTIVE" ] && [ "$T" != "$PARENT_THEME" ] && [ "$T" != "$LATEST_DEFAULT" ]; then
                 THEMES_TO_DELETE="$THEMES_TO_DELETE $T"
             fi
         fi
@@ -766,6 +805,7 @@ step_cleanup() {
     log_step "6.6 Rank Math connect"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
+        delete_option("rank_math_registration_data");
         $data = [
             "username"  => "'"$RANKMATH_EMAIL"'",
             "email"     => "'"$RANKMATH_EMAIL"'",
@@ -774,6 +814,7 @@ step_cleanup() {
             "connected" => 1,
             "site_url"  => "https://'"$DOMAIN"'"
         ];
+        update_option("rank_math_connect_data", $data);
         \RankMath\Admin\Admin_Helper::get_registration_data($data);
         $v = \RankMath\Admin\Admin_Helper::get_registration_data();
         echo $v ? "connected" : "failed";
@@ -781,21 +822,43 @@ step_cleanup() {
         && log_info "6.6 Rank Math connected ($RANKMATH_EMAIL)" \
         || log_warn "6.6 Rank Math connect failed"
 
+    # 6.7 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
+    log_step "6.7 ลบ Rank Math sitemap cache"
+    local SITEMAP_COUNT
+    SITEMAP_COUNT=$(find "$DOCROOT/wp-content/uploads/rank-math/" -name "*.xml" 2>/dev/null | wc -l)
+    if [ "$SITEMAP_COUNT" -gt 0 ]; then
+        rm -f "$DOCROOT/wp-content/uploads/rank-math/"*.xml 2>/dev/null
+        log_info "6.7 ลบ sitemap cache $SITEMAP_COUNT ไฟล์ (Rank Math จะสร้างใหม่)"
+    else
+        log_info "6.7 ไม่มี sitemap cache (ข้าม)"
+    fi
+
     return 0
 }
 
-# ========================== STEP 7-8: FLUSH + PURGE =========================
+# ========================== STEP 7-8: PURGE + FLUSH =========================
 
-step_flush_purge() {
+step_purge_flush() {
     local DOMAIN="$1"
     local CPUSER="$2"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
-    # Step 7: Flush permalink
-    log_step "Step 7: Flush permalink"
+    # Step 7: LiteSpeed purge (ลบ files ตรง — ไม่ง้อ DNS)
+    log_step "Step 7: LiteSpeed purge"
+    rm -rf "$DOCROOT/wp-content/litespeed/" 2>/dev/null
+    rm -rf "/home/${CPUSER}/lscache/" 2>/dev/null
+    log_info "LiteSpeed purge เสร็จ"
+
+    # Step 8: Flush permalink (ขั้นตอนสุดท้าย — เหมือนกด Save Changes ใน Dashboard)
+    log_step "Step 8: Flush permalink (ขั้นตอนสุดท้าย)"
     local FLUSH_RC
-    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" rewrite flush --hard \
-        --path="$DOCROOT" 2>/dev/null
+    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
+        global $wp_rewrite;
+        $wp_rewrite->set_permalink_structure("/%postname%/");
+        $GLOBALS["is_apache"] = true;
+        flush_rewrite_rules(true);
+        echo "done";
+    ' --path="$DOCROOT" 2>/dev/null | grep -q "done"
     FLUSH_RC=$?
     if [ $FLUSH_RC -ne 0 ]; then
         log_warn "$DOMAIN — flush permalink failed"
@@ -803,12 +866,6 @@ step_flush_purge() {
     else
         log_info "Flush permalink เสร็จ"
     fi
-
-    # Step 8: LiteSpeed purge (ลบ files ตรง — ไม่ง้อ DNS)
-    log_step "Step 8: LiteSpeed purge"
-    rm -rf "$DOCROOT/wp-content/litespeed/" 2>/dev/null
-    rm -rf "/home/${CPUSER}/lscache/" 2>/dev/null
-    log_info "LiteSpeed purge เสร็จ"
 
     return 0
 }
@@ -864,8 +921,8 @@ process_site() {
     # Step 6: Cleanup + Config
     step_cleanup "$DOMAIN" "$CPUSER" "$QC_CF_EMAIL" "$QC_TOKEN" "$CF_TOKEN"
 
-    # Step 7-8: Flush + Purge
-    step_flush_purge "$DOMAIN" "$CPUSER"
+    # Step 7-8: Purge + Flush (flush เป็นขั้นตอนสุดท้าย)
+    step_purge_flush "$DOMAIN" "$CPUSER"
 
     # สำเร็จ
     local SITE_END
