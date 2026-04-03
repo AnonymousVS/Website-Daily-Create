@@ -659,81 +659,48 @@ step_cleanup() {
     local CPUSER="$2"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
+    # Helper: เช็ค theme + log ทุกครั้ง (debug mode)
+    _ct() {
+        local LABEL="$1"
+        local T
+        T=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+        if [ "$T" = "$ACTIVE_THEME" ]; then
+            log_info "  🔍 [$LABEL] theme=$T ✅"
+        else
+            log_warn "  🔍 [$LABEL] ❌ theme=$T (ควรเป็น $ACTIVE_THEME)"
+            log_warn "  🔍 [$LABEL] กำลัง activate กลับ..."
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at $LABEL → $T)\n"
+        fi
+    }
+
     log_step "Step 6: Cleanup + Config"
 
     # 6.1 ลบ plugins (hello, akismet, all-in-one-wp-migration)
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" plugin deactivate \
         hello akismet all-in-one-wp-migration \
         --path="$DOCROOT" 2>/dev/null
+    _ct "6.1-หลัง-deactivate"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" plugin delete \
         hello akismet all-in-one-wp-migration \
         --path="$DOCROOT" 2>/dev/null
+    _ct "6.1-หลัง-delete"
     log_info "6.1 ลบ plugins เสร็จ"
+    sleep 2
 
     # 6.2 ลบ default themes — ปิดชั่วคราวเพื่อทดสอบ
     log_info "6.2 ข้ามลบ themes (ปิดชั่วคราวเพื่อทดสอบ)"
-    # sleep 2
-    # local CURRENT_ACTIVE
-    # CURRENT_ACTIVE=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-    #     --path="$DOCROOT" --status=active --field=name 2>/dev/null)
-    #
-    # local PARENT_THEME
-    # PARENT_THEME=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-    #     --path="$DOCROOT" --status=parent --field=name 2>/dev/null)
-    #
-    # local LATEST_DEFAULT=""
-    # local LATEST_NUM=0
-    # local ALL_THEMES
-    # ALL_THEMES=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-    #     --path="$DOCROOT" --field=name 2>/dev/null)
-    #
-    # while read -r T; do
-    #     local NUM
-    #     NUM=$(theme_to_num "$T")
-    #     if [ "$NUM" -gt "$LATEST_NUM" ]; then
-    #         LATEST_NUM=$NUM
-    #         LATEST_DEFAULT=$T
-    #     fi
-    # done <<< "$ALL_THEMES"
-    #
-    # local THEMES_TO_DELETE=""
-    # while read -r T; do
-    #     local NUM
-    #     NUM=$(theme_to_num "$T")
-    #     if [ "$NUM" -gt 0 ]; then
-    #         if [ "$T" != "$CURRENT_ACTIVE" ] && [ "$T" != "$PARENT_THEME" ] && [ "$T" != "$LATEST_DEFAULT" ]; then
-    #             THEMES_TO_DELETE="$THEMES_TO_DELETE $T"
-    #         fi
-    #     fi
-    # done <<< "$ALL_THEMES"
-    #
-    # if [ -n "$THEMES_TO_DELETE" ]; then
-    #     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme delete \
-    #         $THEMES_TO_DELETE --path="$DOCROOT" 2>/dev/null
-    #     log_info "6.2 ลบ themes:$THEMES_TO_DELETE"
-    # else
-    #     log_info "6.2 ไม่มี theme ต้องลบ"
-    # fi
+    _ct "6.2-ข้ามลบ"
 
-    # 6.3 Activate theme (หลังลบ plugins/themes — รอ WordPress process เสร็จก่อน)
+    # 6.3 Activate theme
     sleep 3
     log_step "6.3 Activate $ACTIVE_THEME"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
         --path="$DOCROOT" 2>/dev/null
-    local CURRENT_THEME_CHECK
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme list \
-        --path="$DOCROOT" --status=active --field=name 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" = "$ACTIVE_THEME" ]; then
-        log_info "6.3 Theme active: $ACTIVE_THEME ✅"
-    else
-        log_warn "6.3 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK (ควรเป็น $ACTIVE_THEME)"
-        log_warn "6.3 กำลัง activate ซ้ำ..."
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" \
-            --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.3 → $CURRENT_THEME_CHECK)\n"
-    fi
+    _ct "6.3-หลัง-activate"
 
-    # 6.4 แก้ Font CSS URL เก่า (AI1WM ไม่แก้ URL ในไฟล์ CSS)
+    # 6.4 แก้ Font CSS URL เก่า
+    sleep 3
     log_step "6.4 แก้ Font CSS URL"
     local FONT_CSS="$DOCROOT/wp-content/uploads/blocksy/css/global.css"
     if [ -f "$FONT_CSS" ]; then
@@ -750,31 +717,21 @@ step_cleanup() {
     else
         log_info "6.4 ไม่มี Blocksy font CSS (ข้าม)"
     fi
-    # เช็ค theme หลัง 6.4
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
-        log_warn "6.4 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Font CSS"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.4 → $CURRENT_THEME_CHECK)\n"
-    fi
+    _ct "6.4-หลัง-fontcss"
 
     # 6.5 Freemius clone resolve
+    sleep 3
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config set \
         FS__RESOLVE_CLONE_AS long_term_duplicate \
         --type=constant --path="$DOCROOT" 2>/dev/null
     log_info "6.5 Freemius clone resolve เสร็จ"
-    # เช็ค theme หลัง 6.5
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
-        log_warn "6.5 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Freemius"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.5 → $CURRENT_THEME_CHECK)\n"
-    fi
+    _ct "6.5-หลัง-freemius"
 
     # 6.6 QUIC.cloud init + link
+    sleep 3
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
         --path="$DOCROOT" 2>/dev/null
-    log_info "6.6 QUIC.cloud init เสร็จ"
+    _ct "6.6-หลัง-quic-init"
 
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online link \
@@ -782,19 +739,14 @@ step_cleanup() {
             --api-key="$QC_TOKEN" \
             --path="$DOCROOT" 2>/dev/null
         log_info "6.6 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
+        _ct "6.6-หลัง-quic-link"
     elif [ -n "$QC_CF_EMAIL" ]; then
         log_warn "6.6 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
         SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty)\n"
     fi
-    # เช็ค theme หลัง 6.6
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
-        log_warn "6.6 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง QUIC.cloud"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.6 → $CURRENT_THEME_CHECK)\n"
-    fi
 
     # 6.7 Cloudflare API setup
+    sleep 3
     if [ -n "$CF_TOKEN" ] && [ -n "$QC_CF_EMAIL" ]; then
         log_step "6.7 Cloudflare API setup"
 
@@ -803,8 +755,8 @@ step_cleanup() {
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_email "$QC_CF_EMAIL" --path="$DOCROOT" 2>/dev/null
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_name "$DOMAIN" --path="$DOCROOT" 2>/dev/null
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_clear 1 --path="$DOCROOT" 2>/dev/null
+        _ct "6.7-หลัง-cf-options"
 
-        # Fetch Zone ID จาก Cloudflare API
         local ZONE_ID
         ZONE_ID=$(curl -s -X GET \
             "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
@@ -814,25 +766,19 @@ step_cleanup() {
             | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
         if [ -n "$ZONE_ID" ]; then
-            # Zone ID เป็น protected field — ต้องใช้ wp eval เขียน DB ตรง
             sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval \
                 "update_option('litespeed.conf.cdn-cloudflare_zone', '$ZONE_ID');" \
                 --path="$DOCROOT" 2>/dev/null
             log_info "6.7 Cloudflare setup ครบ — Zone ID: $ZONE_ID"
+            _ct "6.7-หลัง-zone-id"
         else
             log_warn "6.7 Cloudflare Zone ID ไม่เจอ"
             SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (CF Zone ID not found)\n"
         fi
     fi
-    # เช็ค theme หลัง 6.7
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
-        log_warn "6.7 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Cloudflare"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.7 → $CURRENT_THEME_CHECK)\n"
-    fi
 
     # 6.8 Rank Math connect
+    sleep 3
     log_step "6.8 Rank Math connect"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
@@ -852,15 +798,10 @@ step_cleanup() {
     ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
         && log_info "6.8 Rank Math connected ($RANKMATH_EMAIL)" \
         || log_warn "6.8 Rank Math connect failed"
-    # เช็ค theme หลัง 6.8
-    CURRENT_THEME_CHECK=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
-    if [ "$CURRENT_THEME_CHECK" != "$ACTIVE_THEME" ]; then
-        log_warn "6.8 ❌ Theme ถูก reset เป็น $CURRENT_THEME_CHECK หลัง Rank Math"
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at 6.8 → $CURRENT_THEME_CHECK)\n"
-    fi
+    _ct "6.8-หลัง-rankmath"
 
-    # 6.9 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
+    # 6.9 ลบ Rank Math sitemap cache
+    sleep 3
     log_step "6.9 ลบ Rank Math sitemap cache"
     local SITEMAP_COUNT
     SITEMAP_COUNT=$(find "$DOCROOT/wp-content/uploads/rank-math/" -name "*.xml" 2>/dev/null | wc -l)
@@ -870,6 +811,7 @@ step_cleanup() {
     else
         log_info "6.9 ไม่มี sitemap cache (ข้าม)"
     fi
+    _ct "6.9-หลัง-sitemap"
 
     return 0
 }
@@ -881,12 +823,27 @@ step_purge_flush() {
     local CPUSER="$2"
     local DOCROOT="/home/${CPUSER}/public_html/${DOMAIN}"
 
+    # Helper: เช็ค theme (เหมือน step_cleanup)
+    _ct() {
+        local LABEL="$1"
+        local T
+        T=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+        if [ "$T" = "$ACTIVE_THEME" ]; then
+            log_info "  🔍 [$LABEL] theme=$T ✅"
+        else
+            log_warn "  🔍 [$LABEL] ❌ theme=$T (ควรเป็น $ACTIVE_THEME)"
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at $LABEL → $T)\n"
+        fi
+    }
+
     # Step 7: LiteSpeed purge (ลบ files ตรง — ไม่ง้อ DNS)
+    sleep 3
     log_step "Step 7: LiteSpeed purge"
     rm -rf "$DOCROOT/wp-content/litespeed/" 2>/dev/null
     rm -rf "/home/${CPUSER}/lscache/" 2>/dev/null
 
-    # ล้าง LiteSpeed avatar cache table (ป้องกัน Duplicate entry error จาก .wpress เก่า)
+    # ล้าง LiteSpeed avatar cache table
     local TABLE_PREFIX
     TABLE_PREFIX=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" config get table_prefix \
         --path="$DOCROOT" 2>/dev/null)
@@ -896,8 +853,10 @@ step_purge_flush() {
             --path="$DOCROOT" 2>/dev/null
     fi
     log_info "LiteSpeed purge เสร็จ"
+    _ct "7-หลัง-purge"
 
-    # Step 8: Flush permalink (ขั้นตอนสุดท้าย — เหมือนกด Save Changes ใน Dashboard)
+    # Step 8: Flush permalink
+    sleep 3
     log_step "Step 8: Flush permalink (ขั้นตอนสุดท้าย)"
     local FLUSH_RC
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
@@ -914,6 +873,23 @@ step_purge_flush() {
     else
         log_info "Flush permalink เสร็จ"
     fi
+    _ct "8-หลัง-flush"
+
+    # Step 9: Theme monitoring (debug) — เช็คทุก 5 วิ 6 รอบ = 30 วิ
+    log_step "Step 9: Theme monitor (30 วินาที)"
+    local MONITOR_I
+    for MONITOR_I in 1 2 3 4 5 6; do
+        sleep 5
+        local MT
+        MT=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" option get stylesheet --path="$DOCROOT" 2>/dev/null)
+        if [ "$MT" != "$ACTIVE_THEME" ]; then
+            log_warn "  🔍 [9-monitor-${MONITOR_I}x5s] ❌ theme=$MT → activate กลับ"
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" theme activate "$ACTIVE_THEME" --path="$DOCROOT" 2>/dev/null
+            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (theme reset at monitor-${MONITOR_I}x5s → $MT)\n"
+        else
+            log_info "  🔍 [9-monitor-${MONITOR_I}x5s] theme=$MT ✅"
+        fi
+    done
 
     return 0
 }
