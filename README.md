@@ -1,4 +1,4 @@
-# Website-Daily-Creation
+# Website-Daily-Create
 
 Bulk WordPress site creation pipeline สำหรับ cPanel/WHM + LiteSpeed + AI1WM
 
@@ -6,7 +6,7 @@ Bulk WordPress site creation pipeline สำหรับ cPanel/WHM + LiteSpeed 
 
 ```
 website-daily-create.sh   ← Script หลัก (ไม่มี credentials)
-server-config.conf        ← Server/Account config (เปลี่ยนเดือนละครั้ง)
+server-config.conf        ← Server/Account config (กำหนดค่าก่อนรัน)
 domains-config.csv        ← รายชื่อ domain (เปลี่ยนทุกวัน)
 ```
 
@@ -24,13 +24,13 @@ bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Creat
 
 ### server-config.conf
 
-เก็บ credentials ทั้งหมดแยกจาก script — เปลี่ยนเดือนละครั้ง
+เก็บ credentials ทั้งหมดแยกจาก script — **กำหนดค่าให้ถูกต้องก่อนรัน** ทุกครั้ง
 
 ```bash
-# cPanel User (เปลี่ยนทุกเดือน)
+# cPanel User — เว็บจะถูกสร้างใต้ cPanel user นี้
 CPANEL_USER="y2026m04ns504"
 
-# QUIC.cloud + Cloudflare (email ใช้ร่วมกัน)
+# QUIC.cloud + Cloudflare — email ใช้ร่วมกัน กำหนดว่าจะใช้บัญชีไหน
 QC_CF_EMAIL="your-email@gmail.com"
 QC_TOKEN="your-quic-cloud-token"
 CF_TOKEN="your-cloudflare-global-api-key"
@@ -45,6 +45,12 @@ TELEGRAM_BOT_TOKEN="your-bot-token"
 TELEGRAM_CHAT_ID="your-chat-id"
 ```
 
+**เปลี่ยนแปลงตามที่ต้องการ:**
+- `CPANEL_USER` — กำหนดว่าจะสร้างเว็บที่ cPanel user ไหน
+- `QC_CF_EMAIL` / `QC_TOKEN` — กำหนดว่า QUIC.cloud ใช้บัญชีไหน
+- `CF_TOKEN` — กำหนดว่า Cloudflare ใช้ Global API Key ของบัญชีไหน
+- ค่าอื่นๆ — กำหนดให้ถูกต้องก่อนรัน
+
 Script ค้นหา `server-config.conf` ตามลำดับ:
 1. อยู่ข้างๆ CSV file ที่ส่งมา
 2. `/usr/local/etc/website-daily-create/server-config.conf`
@@ -58,11 +64,38 @@ Script ค้นหา `server-config.conf` ตามลำดับ:
 domain,theme
 example1.com,theme-black.store
 example2.com,theme-blue.store
-example3.com,theme-black.store
+example3.com,theme-green.store
 ```
 
 - `domain` — ชื่อ domain ที่จะสร้าง
 - `theme` — ชื่อ .wpress template (ตรงกับไฟล์ใน `/usr/local/share/ai1wm-templates/`)
+
+## .wpress Templates
+
+Template files เก็บที่ `/usr/local/share/ai1wm-templates/` บน server:
+
+```
+/usr/local/share/ai1wm-templates/
+├── theme-black.store.wpress
+├── theme-blue.store.wpress
+├── theme-red.store.wpress
+├── theme-green.store.wpress
+└── theme-purple.store.wpress
+```
+
+### การวางไฟล์ Template
+
+**ต้อง SFTP ไฟล์ .wpress ไปวางบน server ครั้งแรกครั้งเดียว** ก่อนรัน script:
+
+1. เตรียมไฟล์ `.wpress` (export จาก AI1WM บนเว็บต้นแบบ)
+2. SFTP ไปวางที่ `/usr/local/share/ai1wm-templates/` บน server
+3. ชื่อไฟล์ต้องตรงกับ column `theme` ใน CSV + `.wpress`
+
+**ถ้ามีอัพเดท Theme เวอร์ชันใหม่** — ต้อง SFTP ไฟล์ .wpress ใหม่ไปวางทับของเดิม
+
+**โปรแกรม SFTP แนะนำ:**
+- **Termius** (แนะนำ) — รองรับ SFTP ใช้ง่าย ลงบน PC/Mac
+- **FileZilla** — ฟรี รองรับ SFTP เช่นกัน
 
 ## Pipeline Flow
 
@@ -96,19 +129,6 @@ Step 9:      Activate theme (ขั้นตอนสุดท้าย)
 - AI1WM v6.77 plugin (อยู่ใน .wpress template)
 - .wpress template files ใน `/usr/local/share/ai1wm-templates/`
 
-## .wpress Templates
-
-วาง template files ที่ `/usr/local/share/ai1wm-templates/`:
-
-```
-/usr/local/share/ai1wm-templates/
-├── theme-black.store.wpress
-├── theme-blue.store.wpress
-└── theme-red.store.wpress
-```
-
-ชื่อไฟล์ต้องตรงกับ column `theme` ใน CSV + `.wpress`
-
 ## Domain ที่มีอยู่แล้ว
 
 ถ้า domain มีอยู่แล้วใน cPanel:
@@ -118,12 +138,14 @@ Step 9:      Activate theme (ขั้นตอนสุดท้าย)
 
 ใช้สำหรับรันซ้ำเพื่อแก้ปัญหาหรืออัพเดท config ได้
 
-## DNS ยังไม่ point
+## DNS ยังไม่ Point
 
-รัน script ได้แม้ DNS ยังไม่ point — ทุก step ทำบน server:
-- QUIC.cloud link อาจ fail (log warning แล้วไปต่อ)
-- Cloudflare Zone ID อาจหาไม่เจอ (log warning แล้วไปต่อ)
-- หลัง point DNS + เพิ่ม domain ใน Cloudflare → รันอีกครั้งได้
+**ไม่แนะนำให้รัน** ถ้า DNS ยังไม่ point — อาจติดปัญหาเรื่องการ config ค่าต่างๆ:
+- QUIC.cloud link จะ fail (verify domain ไม่ผ่าน)
+- Cloudflare Zone ID หาไม่เจอ (domain ยังไม่อยู่ใน Cloudflare)
+- เว็บเปิดไม่ได้ (403 / default page)
+
+แต่สามารถ **ทดสอบ ทดลอง และประเมินผลลัพธ์** ได้เลย — script จะ log warning แล้วทำต่อไม่หยุด
 
 ## Log
 
