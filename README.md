@@ -1,117 +1,158 @@
-# Website-Daily-Create
+# Website-Daily-Creation
 
-Bulk WordPress Site Creation Pipeline — สร้างเว็บ WordPress จาก .wpress template พร้อมตั้งค่า QUIC.cloud, Cloudflare, Rank Math อัตโนมัติ
+Bulk WordPress site creation pipeline สำหรับ cPanel/WHM + LiteSpeed + AI1WM
 
-## คำสั่งรัน
+## โครงสร้างไฟล์
+
+```
+website-daily-create.sh   ← Script หลัก (ไม่มี credentials)
+server-config.conf        ← Server/Account config (เปลี่ยนเดือนละครั้ง)
+domains-config.csv        ← รายชื่อ domain (เปลี่ยนทุกวัน)
+```
+
+## Quick Start
+
 ```bash
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/server-config.conf -o /tmp/server-config.conf && \
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && \
 bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
 ```
 
-## CSV Format (6 columns)
+ต้องรันด้วย **root** บน server ที่มี cPanel/WHM + LiteSpeed
 
-```csv
-domain,cpanel_user,theme,qc_cf_email,qc_token,cf_token
-a1.com,y2026m04ns504,theme-black.store,user@gmail.com,quic_api_token,cf_global_api_key
-```
+## ไฟล์ Config
 
-| Column | คำอธิบาย |
-|--------|----------|
-| `domain` | ชื่อ domain ที่จะสร้าง |
-| `cpanel_user` | cPanel username ที่จะเพิ่ม addon domain |
-| `theme` | ชื่อ .wpress template (ไม่ต้องใส่ .wpress) |
-| `qc_cf_email` | Email ใช้ร่วมกันทั้ง QUIC.cloud + Cloudflare |
-| `qc_token` | QUIC.cloud API Token |
-| `cf_token` | Cloudflare Global API Key |
+### server-config.conf
 
-## Pipeline — ทำอะไรบ้าง
-
-```
-Step 1:   สร้าง Addon Domain (cpapi2)
-Step 2:   รอ cPanel register domain + สร้าง directory
-Step 3:   ติดตั้ง WordPress ผ่าน WP Toolkit + Vision Set
-Step 4:   Symlink .wpress template เข้า ai1wm-backups/
-Step 5:   AI1WM Restore ผ่าน WP-CLI (PHP CLI ตรง)
-Step 6.1: ลบ symlink + ai1wm-backups/
-Step 6.2: ลบ plugins (hello, akismet, all-in-one-wp-migration)
-Step 6.3: ลบ default themes เก่า (เก็บ active + parent + ใหม่สุด)
-Step 6.4: Freemius clone resolve (Blocksy Companion)
-Step 6.5: QUIC.cloud init + link
-Step 6.6: Cloudflare API setup + fetch Zone ID
-Step 6.7: Rank Math SEO connect
-Step 7:   Flush permalink (wp rewrite flush --hard)
-Step 8:   LiteSpeed cache purge
-```
-
-## Config ใน Script
-
-แก้ไขค่าต่างๆ ที่ส่วนบนของ `website-daily-create.sh`:
+เก็บ credentials ทั้งหมดแยกจาก script — เปลี่ยนเดือนละครั้ง
 
 ```bash
-# --- Telegram Notification ---
-TELEGRAM_BOT_TOKEN="xxx"
-TELEGRAM_CHAT_ID="xxx"
+# cPanel User (เปลี่ยนทุกเดือน)
+CPANEL_USER="y2026m04ns504"
 
-# --- Rank Math SEO (ใช้ค่าเดียวกันทุกเว็บ) ---
-RANKMATH_EMAIL="email@gmail.com"       # Rank Math account email
-RANKMATH_API_KEY="xxx"                 # Rank Math API Key
-RANKMATH_PLAN="pro"                    # free / pro / business / agency
+# QUIC.cloud + Cloudflare (email ใช้ร่วมกัน)
+QC_CF_EMAIL="your-email@gmail.com"
+QC_TOKEN="your-quic-cloud-token"
+CF_TOKEN="your-cloudflare-global-api-key"
+
+# Rank Math SEO
+RANKMATH_EMAIL="your-rankmath-email@gmail.com"
+RANKMATH_API_KEY="your-rankmath-api-key"
+RANKMATH_PLAN="pro"
+
+# Telegram Notification
+TELEGRAM_BOT_TOKEN="your-bot-token"
+TELEGRAM_CHAT_ID="your-chat-id"
 ```
 
-## .wpress Templates
+Script ค้นหา `server-config.conf` ตามลำดับ:
+1. อยู่ข้างๆ CSV file ที่ส่งมา
+2. `/usr/local/etc/website-daily-create/server-config.conf`
+3. ถ้าไม่เจอ → หยุดทันที
 
-วางไฟล์ .wpress ที่ `/usr/local/share/ai1wm-templates/`:
+### domains-config.csv
+
+2 columns: `domain,theme`
+
+```csv
+domain,theme
+example1.com,theme-black.store
+example2.com,theme-blue.store
+example3.com,theme-black.store
+```
+
+- `domain` — ชื่อ domain ที่จะสร้าง
+- `theme` — ชื่อ .wpress template (ตรงกับไฟล์ใน `/usr/local/share/ai1wm-templates/`)
+
+## Pipeline Flow
 
 ```
-/usr/local/share/ai1wm-templates/
-├── theme-black.store.wpress
-├── theme-blue.store.wpress
-├── theme-green.store.wpress
-├── theme-purple.store.wpress
-└── theme-red.store.wpress
+Pre-flight:  CSV, commands, PHP CLI, Vision Set, disk, cPanel user, templates, QUIC, Telegram
+
+Step 1:      สร้าง domain (cpapi2 AddonDomain) — ข้ามถ้ามีอยู่แล้ว
+Step 2:      รอ cPanel register — ข้ามถ้ามีอยู่แล้ว
+Step 3:      WP Toolkit เช็ค + ติดตั้ง WordPress (root, Vision Set)
+Step 4:      Copy .wpress → ai1wm-backups
+Step 5:      AI1WM restore
+Step 6.1:    ลบ plugins (hello, akismet, ai1wm)
+Step 6.2:    ลบ default themes เก่า (เก็บ active + parent + ใหม่สุด)
+Step 6.3:    แก้ Font CSS URL (auto-detect domain เก่า → sed replace)
+Step 6.4:    Freemius clone resolve
+Step 6.5:    QUIC.cloud init + link
+Step 6.6:    Cloudflare API setup + Zone ID
+Step 6.7:    Rank Math connect
+Step 6.8:    ลบ Rank Math sitemap cache
+Step 7:      LiteSpeed purge + TRUNCATE avatar cache
+Step 8:      Flush permalink (wp eval + $GLOBALS["is_apache"]=true)
+Step 9:      Activate theme (ขั้นตอนสุดท้าย)
 ```
-
-## Pre-flight Check (12 ข้อ)
-
-Script ตรวจสอบทุกอย่างก่อนเริ่ม:
-
-1. CSV file มีอยู่ + format ถูกต้อง + ไม่มี domain ซ้ำ
-2. Commands พร้อม (cpapi2, wp-toolkit, wp-cli)
-3. PHP CLI auto-detect (`/opt/cpanel/ea-php*/root/usr/bin/php`)
-4. Vision Set auto-detect (หาจากชื่อ "Vision Set")
-5. Disk space > 30 GB
-6. cPanel users มีอยู่จริง
-7. .wpress templates มีครบ
-8. QUIC.cloud credentials ใน CSV ครบ
-9. Telegram bot ใช้งานได้
-10. Domains ที่มีอยู่แล้ว → แจ้งเตือน
-11. แสดงสรุป → รอกด y ก่อนเริ่ม
-
-## Error Handling
-
-| ระดับ | สิ่งที่เกิด | การจัดการ |
-|-------|------------|----------|
-| 🔴 หยุด loop | Disk < 5GB, Max addon domains, Max databases | หยุดทันที แจ้ง Telegram |
-| ⚠️ ข้ามเว็บ | Domain exists, WP Toolkit fail, Restore fail | ข้ามไปเว็บถัดไป |
-| 🟡 Warning | Flush fail, Purge fail, CF Zone not found | แจ้ง Telegram ตอนสรุป |
-
-## ระยะเวลา
-
-~107 วินาที/เว็บ × 36 เว็บ = ~64 นาที/วัน → 1,080 เว็บ/เดือน
 
 ## Requirements
 
 - AlmaLinux 9 + cPanel/WHM
 - LiteSpeed Enterprise + LiteSpeed Cache plugin
-- WP Toolkit (Vision Set ต้องตั้งไว้แล้ว)
-- AI1WM v6.77 patched (ติดตั้งใน .wpress template)
-- Rank Math SEO plugin (ติดตั้งใน .wpress template)
-- Blocksy theme + Companion (ติดตั้งใน .wpress template)
+- WP Toolkit (cPanel)
+- WP-CLI (`/usr/local/bin/wp`)
+- AI1WM v6.77 plugin (อยู่ใน .wpress template)
+- .wpress template files ใน `/usr/local/share/ai1wm-templates/`
 
-## Log Files
+## .wpress Templates
+
+วาง template files ที่ `/usr/local/share/ai1wm-templates/`:
+
+```
+/usr/local/share/ai1wm-templates/
+├── theme-black.store.wpress
+├── theme-blue.store.wpress
+└── theme-red.store.wpress
+```
+
+ชื่อไฟล์ต้องตรงกับ column `theme` ใน CSV + `.wpress`
+
+## Domain ที่มีอยู่แล้ว
+
+ถ้า domain มีอยู่แล้วใน cPanel:
+- ข้าม Step 1-2 (สร้าง domain)
+- ไปต่อ Step 3 (WP Toolkit) ทันที
+- ทำ restore + config ใหม่ทั้งหมด
+
+ใช้สำหรับรันซ้ำเพื่อแก้ปัญหาหรืออัพเดท config ได้
+
+## DNS ยังไม่ point
+
+รัน script ได้แม้ DNS ยังไม่ point — ทุก step ทำบน server:
+- QUIC.cloud link อาจ fail (log warning แล้วไปต่อ)
+- Cloudflare Zone ID อาจหาไม่เจอ (log warning แล้วไปต่อ)
+- หลัง point DNS + เพิ่ม domain ใน Cloudflare → รันอีกครั้งได้
+
+## Log
+
+Log เก็บที่ `/var/log/website-daily-create/` แยกตามวันที่:
 
 ```
 /var/log/website-daily-create/
-└── 2026-04-03.log
+├── 2026-04-01.log
+├── 2026-04-02.log
+└── 2026-04-04.log
 ```
+
+สรุปผลส่ง Telegram อัตโนมัติหลังรันเสร็จ
+
+## Error Handling
+
+| ระดับ | สถานการณ์ | ผล |
+|-------|----------|-----|
+| หยุด loop | disk < 5GB, max addon, max DB | หยุดทันทีป้องกัน server เต็ม |
+| ข้ามเว็บ | WP Toolkit fail, restore fail | ข้ามเว็บนี้ ทำเว็บถัดไป |
+| warning | flush fail, CF Zone ไม่เจอ, Rank Math fail | แจ้งเตือน ทำต่อ |
+
+## Version History
+
+| Version | เปลี่ยนอะไร |
+|---------|------------|
+| 2.5.3 | Production: activate theme สุดท้าย, เปิด 6.2 ลบ themes, ลบ debug code |
+| 2.5.2 | Debug: theme check ทุก step, Step 9 monitor 30 วิ |
+| 2.5.0 | ย้าย activate theme หลัง cleanup, TRUNCATE litespeed_avatar |
+| 2.4.0 | แยก 3 ไฟล์: script + server-config.conf + CSV 2 columns |
+| 2.3.0 | Font CSS auto-detect, Rank Math fix, wp eval flush |
+| 2.0.0 | Copy method, suppress deprecated, fix CF Zone ID |
