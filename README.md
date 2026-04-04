@@ -83,18 +83,34 @@ Template files เก็บที่ `/usr/local/share/ai1wm-templates/` บน 
 └── theme-purple.store.wpress
 ```
 
-### การวางไฟล์ Template
+### วิธีตั้งค่า (ครั้งแรกครั้งเดียวต่อ server)
 
-**ต้อง SFTP ไฟล์ .wpress ไปวางบน server ครั้งแรกครั้งเดียว** ก่อนรัน script:
+ใช้โปรแกรม **Termius** หรือ **FileZilla** เชื่อมต่อ SFTP เข้า server ด้วย **root**:
 
-1. เตรียมไฟล์ `.wpress` (export จาก AI1WM บนเว็บต้นแบบ)
-2. SFTP ไปวางที่ `/usr/local/share/ai1wm-templates/` บน server
-3. ชื่อไฟล์ต้องตรงกับ column `theme` ใน CSV + `.wpress`
+1. เปิด SFTP → ไปที่ path `/usr/local/share/`
+2. สร้างโฟลเดอร์ `ai1wm-templates`
+3. เข้าไปในโฟลเดอร์ `ai1wm-templates`
+4. Copy ไฟล์ `.wpress` ต้นแบบแต่ละสีไปวางในนั้น
 
-**ถ้ามีอัพเดท Theme เวอร์ชันใหม่** — ต้อง SFTP ไฟล์ .wpress ใหม่ไปวางทับของเดิม
+```
+ผลลัพธ์:
+/usr/local/share/ai1wm-templates/
+├── theme-black.store.wpress
+├── theme-blue.store.wpress
+├── theme-red.store.wpress
+├── theme-green.store.wpress
+└── theme-purple.store.wpress
+```
 
-**โปรแกรม SFTP แนะนำ:**
-- **Termius** (แนะนำ) — รองรับ SFTP ใช้ง่าย ลงบน PC/Mac
+ชื่อไฟล์ต้องตรงกับ column `theme` ใน CSV + `.wpress`
+
+**ถ้ามีอัพเดท Theme เวอร์ชันใหม่** — SFTP เข้าไปวางไฟล์ .wpress ใหม่ทับของเดิมในโฟลเดอร์เดียวกัน
+
+> **หมายเหตุ:** ต้อง login SFTP ด้วย root เท่านั้น เพราะ `/usr/local/share/` เป็น system path ที่ cPanel user ไม่มีสิทธิ์เขียน
+
+### โปรแกรม SFTP แนะนำ
+
+- **Termius** (แนะนำ) — รองรับ SFTP มี File Manager ในตัว ใช้ง่าย ลงบน PC/Mac
 - **FileZilla** — ฟรี รองรับ SFTP เช่นกัน
 
 ## Pipeline Flow
