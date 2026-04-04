@@ -163,6 +163,34 @@ Step 9:      Activate theme (ขั้นตอนสุดท้าย)
 
 แต่สามารถ **ทดสอบ ทดลอง และประเมินผลลัพธ์** ได้เลย — script จะ log warning แล้วทำต่อไม่หยุด
 
+## ขั้นตอนที่ต้องทำ Manual หลัง Script สร้างเว็บเสร็จ
+
+Script ทำ config อัตโนมัติได้ถึง Step 9 — ขั้นตอนต่อไปนี้ต้องทำเองผ่าน Browser:
+
+### 1. เปลี่ยน Logo (Header + Footer)
+- เข้า wp-admin → Appearance → Customize → Header / Footer
+- อัพโหลดรูป Logo ใหม่ทั้ง Header และ Footer
+
+### 2. ตั้งค่า Cloudflare (นอกเหนือ API)
+- ค่าบางตัวที่ยังเป็น Beta ต้องตั้งค่าเองใน Cloudflare Dashboard
+- เช่น Speed, Caching Rules, Page Rules ที่ API ยังไม่รองรับ
+
+### 3. Google Search Console
+- Add Property → เพิ่ม domain ใน GSC
+- เพิ่ม Sitemap (`/sitemap_index.xml`)
+- เพิ่มสิทธิ์ Looker Studio (ถ้าต้องการดู report)
+
+### 4. ลบ User เก่า + สร้าง User ใหม่
+- เข้า wp-admin → Users → ลบ user เดิมที่มากับ WP Toolkit
+- Add New User → ตั้งชื่อคนไทย + role Administrator
+- นำ Password ไปบันทึกใน Google Sheets
+
+### 5. เปลี่ยน Title ที่ Front Page
+- เข้า wp-admin → Pages → Front Page → แก้ Title
+
+### 6. ตั้ง Site Title
+- เข้า wp-admin → Settings → General → Site Title
+
 ## Log
 
 Log เก็บที่ `/var/log/website-daily-create/` แยกตามวันที่:
