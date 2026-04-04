@@ -9,23 +9,6 @@ curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/
 bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
 ```
 
-```bash
-# ติดตั้ง (ครั้งเดียว)
-curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh \
-  -o /usr/local/sbin/website-daily-create.sh && chmod +x /usr/local/sbin/website-daily-create.sh
-
-# อัพเดท script
-curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh \
-  -o /usr/local/sbin/website-daily-create.sh
-
-# รัน — ดึง CSV จาก GitHub
-curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv \
-  -o /tmp/today.csv && website-daily-create.sh /tmp/today.csv
-
-# รัน — ใช้ CSV ใน server
-website-daily-create.sh /path/to/domains-config.csv
-```
-
 ## CSV Format (6 columns)
 
 ```csv
