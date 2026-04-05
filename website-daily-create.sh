@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.3
+# Version: 2.5.4
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -19,7 +19,7 @@
 
 set -o pipefail
 
-VERSION="2.5.3"
+VERSION="2.5.4"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -370,8 +370,7 @@ preflight_check() {
 step_create_domain() {
     local DOMAIN="$1"
     local CPUSER="$2"
-    local SUBDOMAIN_PREFIX
-    SUBDOMAIN_PREFIX=$(echo "$DOMAIN" | cut -d. -f1)
+    local SUBDOMAIN_PREFIX="$DOMAIN"
 
     log_step "Step 1: สร้าง Domain $DOMAIN"
 
@@ -381,14 +380,14 @@ step_create_domain() {
         subdomain="$SUBDOMAIN_PREFIX" \
         dir="public_html/$DOMAIN" 2>&1)
 
+    if echo "$RESULT" | grep -q "subdomain.*already exists"; then
+        log_warn "$DOMAIN — subdomain prefix ซ้ำ ($SUBDOMAIN_PREFIX)"
+        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (subdomain prefix ซ้ำ)\n"
+        return 1
+    fi
     if echo "$RESULT" | grep -q "already exists"; then
         log_warn "$DOMAIN — domain already exists"
         SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (domain already exists)\n"
-        return 1
-    fi
-    if echo "$RESULT" | grep -q "subdomain.*already exists"; then
-        log_warn "$DOMAIN — subdomain already exists"
-        SUMMARY_SKIP="${SUMMARY_SKIP}  - $DOMAIN (subdomain already exists)\n"
         return 1
     fi
     if echo "$RESULT" | grep -qi "max.*addon\|maximum.*addon"; then
