@@ -1,25 +1,47 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.4
+# Version: 2.5.5
+# Updated: 2026-04-18 19:45 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
 # CSV Format: domain,theme
 # Example:    a1.com,theme-black.store
 # ============================================================================
-# v2.0.0 Changes:
-#   - Copy method แทน symlink (ไม่ต้อง symlink)
+# CHANGELOG:
+# v2.5.5 (2026-04-18)
+#   - QUIC.cloud link ย้ายจาก Step 6.5 → Step 10 หลัง loop จบ
+#   - Step 6.5 ทำแค่ init (anonymous mode — ไม่มี rate limit)
+#   - Step 10: delay 30s + countdown นับถอยหลัง + auto retry 3 ครั้ง
+#   - ตรวจจับ cooldown อัตโนมัติ ("3m 24s" → 209s)
+#   - Process substitution ป้องกัน subshell
+# v2.5.4 (2026-04-18)
+#   - SUBDOMAIN_PREFIX ใช้ชื่อ domain เต็ม (เหมือน cPanel GUI)
+#   - แก้ error detection: เช็ค subdomain ก่อน already exists
+# v2.5.3 (2026-04-04)
+#   - Production: activate theme สุดท้าย (Step 9)
+#   - เปิด 6.2 ลบ default themes + ลบ debug code (_ct)
+# v2.5.0 (2026-04-04)
+#   - ย้าย activate theme หลัง cleanup
+#   - TRUNCATE litespeed_avatar ป้องกัน Duplicate entry
+# v2.4.0 (2026-04-03)
+#   - แยก 3 ไฟล์: script + server-config.conf + CSV 2 columns
+#   - ลบ credentials ออกจาก script ทั้งหมด
+# v2.3.0 (2026-04-03)
+#   - Font CSS auto-detect old domain → sed replace
+#   - Rank Math delete 2 options + update_option
+#   - wp eval flush_rewrite_rules ($GLOBALS["is_apache"]=true)
+# v2.0.0 (2026-04-02)
+#   - Copy method แทน symlink
 #   - Suppress PHP Deprecated warnings (-d error_reporting flag)
-#   - Fix exit code capture (local แยก 2 บรรทัด)
 #   - Fix CF Zone ID (wp eval update_option แทน litespeed-option set)
-#   - ลบ *.wpress ยืดหยุ่นทุกชื่อไฟล์
 #   - $PHP_CLI ห้าม quote (มี flag ต่อท้าย ต้อง word-split)
 # ============================================================================
 
 set -o pipefail
 
-VERSION="2.5.4"
+VERSION="2.5.5"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -68,6 +90,10 @@ SUMMARY_SUCCESS=""
 SUMMARY_SKIP=""
 SUMMARY_FAIL=""
 SUMMARY_WARN=""
+LINK_DOMAINS=""   # เก็บ domain ที่ต้อง QUIC.cloud link หลัง loop จบ
+LINK_SUCCESS=0
+LINK_FAIL=0
+LINK_TOTAL=0
 # ============================================================================
 
 # ========================== FUNCTIONS =======================================
@@ -739,20 +765,14 @@ step_cleanup() {
     log_info "6.4 Freemius clone resolve เสร็จ"
     sleep 3
 
-    # 6.5 QUIC.cloud init + link
+    # 6.5 QUIC.cloud init (link จะทำหลัง loop จบ — ป้องกัน rate limit)
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
         --path="$DOCROOT" 2>/dev/null
     log_info "6.5 QUIC.cloud init เสร็จ"
 
+    # บันทึก domain สำหรับ link ทีหลัง
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online link \
-            --email="$QC_CF_EMAIL" \
-            --api-key="$QC_TOKEN" \
-            --path="$DOCROOT" 2>/dev/null
-        log_info "6.5 QUIC.cloud link เสร็จ ($QC_CF_EMAIL)"
-    elif [ -n "$QC_CF_EMAIL" ]; then
-        log_warn "6.5 QUIC token ว่าง สำหรับ $QC_CF_EMAIL"
-        SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC token empty)\n"
+        LINK_DOMAINS="${LINK_DOMAINS}${DOMAIN}\n"
     fi
     sleep 3
 
@@ -955,6 +975,9 @@ show_summary() {
     echo -e "  ${GREEN}✅ สำเร็จ: $COUNT_SUCCESS${NC}"
     echo -e "  ${YELLOW}⚠️ ข้าม: $COUNT_SKIP${NC}"
     echo -e "  ${RED}❌ ล้มเหลว: $COUNT_FAIL${NC}"
+    if [ "$LINK_TOTAL" -gt 0 ]; then
+        echo -e "  ☁️ QUIC.cloud link: ${LINK_SUCCESS}/${LINK_TOTAL} สำเร็จ"
+    fi
     echo "  ⏱ เวลารวม: ${TOTAL_DURATION} นาที"
     echo "  💾 Disk free: ${DISK_FREE}GB"
     echo "  🖥 Server: $(hostname)"
@@ -978,12 +1001,23 @@ show_summary() {
     fi
 
     # Telegram
+    local QC_STATUS=""
+    if [ "$LINK_TOTAL" -gt 0 ]; then
+        if [ "$LINK_SUCCESS" -eq "$LINK_TOTAL" ]; then
+            QC_STATUS="
+☁️ QUIC.cloud link: ✅ ${LINK_SUCCESS}/${LINK_TOTAL} สำเร็จทั้งหมด"
+        else
+            QC_STATUS="
+☁️ QUIC.cloud link: ${LINK_SUCCESS}/${LINK_TOTAL} สำเร็จ (❌ ${LINK_FAIL} ไม่สำเร็จ)"
+        fi
+    fi
+
     local TG_MSG="📊 <b>Daily Web Creation — $(date '+%d %b %Y')</b>
 🖥 Server: $(hostname)
 
 ✅ สำเร็จ: $COUNT_SUCCESS/$COUNT_TOTAL
 ⚠️ ข้าม: $COUNT_SKIP
-❌ ล้มเหลว: $COUNT_FAIL
+❌ ล้มเหลว: $COUNT_FAIL${QC_STATUS}
 
 ⏱ เวลารวม: ${TOTAL_DURATION} นาที
 💾 Disk free: ${DISK_FREE}GB"
@@ -1083,6 +1117,96 @@ main() {
         fi
 
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
+
+    # Step 10: QUIC.cloud link ทุกเว็บ (หลัง loop จบ — ป้องกัน rate limit)
+    if [ -n "$LINK_DOMAINS" ] && [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
+        echo ""
+        echo "════════════════════════════════════════"
+        echo "  Step 10: QUIC.cloud Link"
+        echo "════════════════════════════════════════"
+
+        LINK_TOTAL=$(echo -e "$LINK_DOMAINS" | grep -c '[^[:space:]]')
+        log_step "Step 10: QUIC.cloud link $LINK_TOTAL เว็บ"
+
+        local LINK_COUNT=0
+
+        # แปลง cooldown text เป็นวินาที (เช่น "3m 24s" → 204)
+        parse_cooldown() {
+            local TEXT="$1"
+            local MINS SECS
+            MINS=$(echo "$TEXT" | grep -oP '\d+(?=m)' || echo 0)
+            SECS=$(echo "$TEXT" | grep -oP '\d+(?=s)' || echo 0)
+            [ -z "$MINS" ] && MINS=0
+            [ -z "$SECS" ] && SECS=0
+            echo $(( MINS * 60 + SECS + 5 ))
+        }
+
+        # Countdown timer (แสดงนับถอยหลัง)
+        countdown() {
+            local WAIT_SECS="$1"
+            local MSG="$2"
+            local i
+            for i in $(seq "$WAIT_SECS" -1 1); do
+                printf "\r  ⏳ $MSG — cooldown %ds  " "$i"
+                sleep 1
+            done
+            printf "\r\033[K"
+        }
+
+        # link ทีละเว็บ
+        try_link() {
+            local DOMAIN="$1"
+            local DOCROOT="/home/${CPANEL_USER}/public_html/${DOMAIN}"
+            local MAX_RETRY=3
+            local ATTEMPT=0
+
+            while [ $ATTEMPT -lt $MAX_RETRY ]; do
+                ATTEMPT=$((ATTEMPT+1))
+                local RESULT
+                RESULT=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online link \
+                    --email="$QC_CF_EMAIL" \
+                    --api-key="$QC_TOKEN" \
+                    --path="$DOCROOT" 2>&1)
+
+                if echo "$RESULT" | grep -qi "success\|linked"; then
+                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — link สำเร็จ ✅"
+                    LINK_SUCCESS=$((LINK_SUCCESS+1))
+                    return 0
+                elif echo "$RESULT" | grep -qi "try after"; then
+                    local CD_TEXT
+                    CD_TEXT=$(echo "$RESULT" | grep -oP 'try after \K[^.]+')
+                    local CD_SECS
+                    CD_SECS=$(parse_cooldown "$CD_TEXT")
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — rate limit ($CD_TEXT)"
+                    countdown "$CD_SECS" "$DOMAIN"
+                else
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail: $(echo "$RESULT" | tail -1)"
+                    LINK_FAIL=$((LINK_FAIL+1))
+                    SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC link failed)\n"
+                    return 1
+                fi
+            done
+
+            log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail หลัง $MAX_RETRY retry"
+            LINK_FAIL=$((LINK_FAIL+1))
+            SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC link failed after $MAX_RETRY retries)\n"
+            return 1
+        }
+
+        # ใช้ process substitution แทน pipe (ป้องกัน subshell — ตัวแปรไม่หาย)
+        while read -r D; do
+            [ -z "$D" ] && continue
+            LINK_COUNT=$((LINK_COUNT+1))
+            try_link "$D"
+
+            # delay 30s ก่อนเว็บถัดไป (ป้องกัน rate limit)
+            if [ $LINK_COUNT -lt $LINK_TOTAL ]; then
+                countdown 30 "รอก่อนเว็บถัดไป"
+            fi
+        done < <(echo -e "$LINK_DOMAINS")
+
+        log_info "Step 10: QUIC.cloud link เสร็จ (สำเร็จ: $LINK_SUCCESS/$LINK_TOTAL)"
+    fi
 
     show_summary
 
