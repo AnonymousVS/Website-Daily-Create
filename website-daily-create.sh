@@ -766,11 +766,16 @@ step_cleanup() {
     sleep 3
 
     # 6.5 QUIC.cloud init (link จะทำหลัง loop จบ — ป้องกัน rate limit)
-    sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
-        --path="$DOCROOT" 2>/dev/null
-    log_info "6.5 QUIC.cloud init เสร็จ"
+    local INIT_RESULT
+    INIT_RESULT=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
+        --path="$DOCROOT" 2>&1)
+    if echo "$INIT_RESULT" | grep -qi "success\|Congratulations"; then
+        log_info "6.5 QUIC.cloud init สำเร็จ ✅"
+    else
+        log_warn "6.5 QUIC.cloud init ไม่สำเร็จ (จะ retry ใน Step 10)"
+    fi
 
-    # บันทึก domain สำหรับ link ทีหลัง
+    # บันทึก domain สำหรับ link ทีหลัง (ไม่ว่า init สำเร็จหรือไม่ — Step 10 จะ init ซ้ำถ้าจำเป็น)
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         LINK_DOMAINS="${LINK_DOMAINS}${DOMAIN}\n"
     fi
@@ -1153,7 +1158,7 @@ main() {
             printf "\r\033[K"
         }
 
-        # link ทีละเว็บ
+        # link ทีละเว็บ (auto init ถ้ายังไม่ activate)
         try_link() {
             local DOMAIN="$1"
             local DOCROOT="/home/${CPANEL_USER}/public_html/${DOMAIN}"
@@ -1172,6 +1177,12 @@ main() {
                     log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — link สำเร็จ ✅"
                     LINK_SUCCESS=$((LINK_SUCCESS+1))
                     return 0
+                elif echo "$RESULT" | grep -qi "activate QC first"; then
+                    # init ยังไม่สำเร็จ → init ก่อน แล้ว retry
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ init → กำลัง init..."
+                    sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
+                        --path="$DOCROOT" 2>/dev/null
+                    countdown 10 "$DOMAIN — รอหลัง init"
                 elif echo "$RESULT" | grep -qi "try after"; then
                     local CD_TEXT
                     CD_TEXT=$(echo "$RESULT" | grep -oP 'try after \K[^.]+')
@@ -1179,6 +1190,9 @@ main() {
                     CD_SECS=$(parse_cooldown "$CD_TEXT")
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — rate limit ($CD_TEXT)"
                     countdown "$CD_SECS" "$DOMAIN"
+                elif echo "$RESULT" | grep -qi "Invalid API"; then
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — API error → รอ 60s"
+                    countdown 60 "$DOMAIN — API cooldown"
                 else
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail: $(echo "$RESULT" | tail -1)"
                     LINK_FAIL=$((LINK_FAIL+1))
