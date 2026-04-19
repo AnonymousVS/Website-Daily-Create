@@ -2,7 +2,7 @@
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
 # Version: 2.5.6
-# Updated: 2026-04-19 22:30 (UTC+7)
+# Updated: 2026-04-19 22:53 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -11,9 +11,11 @@
 # ============================================================================
 # CHANGELOG:
 # v2.5.6 (2026-04-19)
-#   - ลบ .maintenance หลัง AI1WM restore (ป้องกัน QUIC.cloud init fail)
-#   - Step 10 retry เพิ่มเป็น 5 ครั้ง + countdown 60s (รอ Cloudflare settle)
-#   - Step 10 init retry แสดง retry count + เช็คผล init
+#   - ลบ Step 6.5 init ออก (ย้ายไป Step 10 ทั้งหมด)
+#   - Step 10: Purge CF → เช็ค HTTP 200 → init → link
+#   - ลบ .maintenance หลัง AI1WM restore
+#   - Step 10 retry 5 ครั้ง + countdown 60s
+#   - Root cause: Cloudflare ยัง settle → QUIC callback fail
 # v2.5.5 (2026-04-19)
 #   - QUIC.cloud link ย้ายจาก Step 6.5 → Step 10 หลัง loop จบ
 #   - Step 6.5 ทำแค่ init (anonymous mode) + เช็คผล init
@@ -774,17 +776,7 @@ step_cleanup() {
     log_info "6.4 Freemius clone resolve เสร็จ"
     sleep 3
 
-    # 6.5 QUIC.cloud init (link จะทำหลัง loop จบ — ป้องกัน rate limit)
-    local INIT_RESULT
-    INIT_RESULT=$(sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-online init \
-        --path="$DOCROOT" 2>&1)
-    if echo "$INIT_RESULT" | grep -qi "success\|Congratulations"; then
-        log_info "6.5 QUIC.cloud init สำเร็จ ✅"
-    else
-        log_warn "6.5 QUIC.cloud init ไม่สำเร็จ (จะ retry ใน Step 10)"
-    fi
-
-    # บันทึก domain สำหรับ link ทีหลัง (ไม่ว่า init สำเร็จหรือไม่ — Step 10 จะ init ซ้ำถ้าจำเป็น)
+    # 6.5 บันทึก domain สำหรับ QUIC.cloud init + link ใน Step 10 (หลัง loop จบ)
     if [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         LINK_DOMAINS="${LINK_DOMAINS}${DOMAIN}\n"
     fi
@@ -1173,15 +1165,16 @@ main() {
 
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
 
-    # Step 10: QUIC.cloud link ทุกเว็บ (หลัง loop จบ — ป้องกัน rate limit)
+    # Step 10: QUIC.cloud init + link (หลัง loop จบ)
+    # Flow: Purge CF → เช็ค status 200 → init → link
     if [ -n "$LINK_DOMAINS" ] && [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         echo ""
         echo "════════════════════════════════════════"
-        echo "  Step 10: QUIC.cloud Link"
+        echo "  Step 10: QUIC.cloud Init + Link"
         echo "════════════════════════════════════════"
 
         LINK_TOTAL=$(echo -e "$LINK_DOMAINS" | grep -c '[^[:space:]]')
-        log_step "Step 10: QUIC.cloud link $LINK_TOTAL เว็บ"
+        log_step "Step 10: QUIC.cloud init + link $LINK_TOTAL เว็บ"
 
         local LINK_COUNT=0
 
@@ -1196,7 +1189,7 @@ main() {
             echo $(( MINS * 60 + SECS + 5 ))
         }
 
-        # Countdown timer (แสดงนับถอยหลัง)
+        # Countdown timer
         countdown() {
             local WAIT_SECS="$1"
             local MSG="$2"
@@ -1208,13 +1201,89 @@ main() {
             printf "\r\033[K"
         }
 
-        # link ทีละเว็บ (auto init ถ้ายังไม่ activate)
-        try_link() {
+        # Purge Cloudflare cache (ต้องมี CF_TOKEN + Zone ID)
+        purge_cf() {
+            local DOMAIN="$1"
+            if [ -z "$CF_TOKEN" ]; then
+                return 0
+            fi
+            local CF_AUTH_HEADER
+            if [[ "$CF_TOKEN" == cfut_* ]]; then
+                CF_AUTH_HEADER="Authorization: Bearer $CF_TOKEN"
+            else
+                CF_AUTH_HEADER="X-Auth-Key: $CF_TOKEN"
+            fi
+            local ZONE_ID
+            if [[ "$CF_TOKEN" == cfut_* ]]; then
+                ZONE_ID=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+                    -H "Authorization: Bearer $CF_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+            else
+                ZONE_ID=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+                    -H "X-Auth-Email: $QC_CF_EMAIL" \
+                    -H "X-Auth-Key: $CF_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+            fi
+            if [ -n "$ZONE_ID" ]; then
+                if [[ "$CF_TOKEN" == cfut_* ]]; then
+                    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+                        -H "Authorization: Bearer $CF_TOKEN" \
+                        -H "Content-Type: application/json" \
+                        --data '{"purge_everything":true}' >/dev/null 2>&1
+                else
+                    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+                        -H "X-Auth-Email: $QC_CF_EMAIL" \
+                        -H "X-Auth-Key: $CF_TOKEN" \
+                        -H "Content-Type: application/json" \
+                        --data '{"purge_everything":true}' >/dev/null 2>&1
+                fi
+                log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — Cloudflare purge ✅"
+            fi
+        }
+
+        # เช็ค HTTP status จาก internet (ต้อง 200 ก่อน init)
+        wait_for_200() {
+            local DOMAIN="$1"
+            local MAX_WAIT=5
+            local WAIT_I=0
+            while [ $WAIT_I -lt $MAX_WAIT ]; do
+                WAIT_I=$((WAIT_I+1))
+                local STATUS
+                STATUS=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN/" 2>/dev/null)
+                if [ "$STATUS" = "200" ]; then
+                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — HTTP 200 ✅"
+                    return 0
+                fi
+                log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — HTTP $STATUS (รอ... $WAIT_I/$MAX_WAIT)"
+                countdown 30 "$DOMAIN — รอเว็บ online"
+            done
+            log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ 200 หลังรอ ${MAX_WAIT} ครั้ง (ข้าม)"
+            return 1
+        }
+
+        # init + link ทีละเว็บ
+        try_init_link() {
             local DOMAIN="$1"
             local DOCROOT="/home/${CPANEL_USER}/public_html/${DOMAIN}"
             local MAX_RETRY=5
             local ATTEMPT=0
 
+            # init ก่อน
+            local INIT_R
+            INIT_R=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
+                --path="$DOCROOT" 2>&1)
+            if echo "$INIT_R" | grep -qi "success\|Congratulations"; then
+                log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init สำเร็จ ✅"
+            else
+                log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init fail ($(echo "$INIT_R" | tail -1))"
+                LINK_FAIL=$((LINK_FAIL+1))
+                SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC init failed)\n"
+                return 1
+            fi
+
+            # link (retry ถ้าจำเป็น)
             while [ $ATTEMPT -lt $MAX_RETRY ]; do
                 ATTEMPT=$((ATTEMPT+1))
                 local RESULT
@@ -1227,19 +1296,6 @@ main() {
                     log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — link สำเร็จ ✅"
                     LINK_SUCCESS=$((LINK_SUCCESS+1))
                     return 0
-                elif echo "$RESULT" | grep -qi "activate QC first"; then
-                    # init ยังไม่สำเร็จ → init ก่อน แล้ว retry
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ init → กำลัง init... (retry $ATTEMPT/$MAX_RETRY)"
-                    local INIT_R
-                    INIT_R=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
-                        --path="$DOCROOT" 2>&1)
-                    if echo "$INIT_R" | grep -qi "success\|Congratulations"; then
-                        log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init สำเร็จ → retry link"
-                        countdown 5 "$DOMAIN — รอหลัง init"
-                    else
-                        log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init fail (Cloudflare อาจยัง settle ไม่เสร็จ)"
-                        countdown 60 "$DOMAIN — รอ Cloudflare settle"
-                    fi
                 elif echo "$RESULT" | grep -qi "try after"; then
                     local CD_TEXT
                     CD_TEXT=$(echo "$RESULT" | grep -oP 'try after \K[^.]+')
@@ -1248,35 +1304,49 @@ main() {
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — rate limit ($CD_TEXT)"
                     countdown "$CD_SECS" "$DOMAIN"
                 elif echo "$RESULT" | grep -qi "Invalid API"; then
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — API error → รอ 60s (retry $ATTEMPT/$MAX_RETRY)"
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — API error (retry $ATTEMPT/$MAX_RETRY)"
                     countdown 60 "$DOMAIN — API cooldown"
                 else
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail: $(echo "$RESULT" | tail -1)"
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — link fail: $(echo "$RESULT" | tail -1)"
                     LINK_FAIL=$((LINK_FAIL+1))
                     SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC link failed)\n"
                     return 1
                 fi
             done
 
-            log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail หลัง $MAX_RETRY retry"
+            log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — link fail หลัง $MAX_RETRY retry"
             LINK_FAIL=$((LINK_FAIL+1))
             SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (QUIC link failed after $MAX_RETRY retries)\n"
             return 1
         }
 
-        # ใช้ process substitution แทน pipe (ป้องกัน subshell — ตัวแปรไม่หาย)
+        # Main Step 10 loop
         while read -r D; do
             [ -z "$D" ] && continue
             LINK_COUNT=$((LINK_COUNT+1))
-            try_link "$D"
 
-            # delay 30s ก่อนเว็บถัดไป (ป้องกัน rate limit)
+            log_step "  [$LINK_COUNT/$LINK_TOTAL] $D"
+
+            # 1. Purge Cloudflare cache
+            purge_cf "$D"
+
+            # 2. รอ HTTP 200
+            countdown 5 "$D — รอหลัง purge"
+            if wait_for_200 "$D"; then
+                # 3. Init + Link
+                try_init_link "$D"
+            else
+                LINK_FAIL=$((LINK_FAIL+1))
+                SUMMARY_WARN="${SUMMARY_WARN}  - $D (เว็บยังไม่ online — ข้าม QUIC)\n"
+            fi
+
+            # delay ก่อนเว็บถัดไป
             if [ $LINK_COUNT -lt $LINK_TOTAL ]; then
                 countdown 30 "รอก่อนเว็บถัดไป"
             fi
         done < <(echo -e "$LINK_DOMAINS")
 
-        log_info "Step 10: QUIC.cloud link เสร็จ (สำเร็จ: $LINK_SUCCESS/$LINK_TOTAL)"
+        log_info "Step 10: QUIC.cloud เสร็จ (สำเร็จ: $LINK_SUCCESS/$LINK_TOTAL)"
     fi
 
     show_summary
