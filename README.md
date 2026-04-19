@@ -14,10 +14,15 @@ domains-config.csv        ← รายชื่อ domain (เปลี่ย�
 
 ```bash
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/server-config.conf -o /tmp/server-config.conf && \
-curl -s -H "Authorization: token ghp_2A18Rc7JLgqpFaRcqzS97uvzRdUxxxxxxxxxxxx" \
+curl -s -H "Authorization: token ghp_2A18Rc7JLgqpFaRcqzS97uvzRdUxxxxxxxxxxxx github ไม่อนุญาตให้ใส่ token " \
 https://raw.githubusercontent.com/AnonymousVS/config/main/cf-token-Website-Daily-Create.conf -o /tmp/cf-token-Website-Daily-Create.conf && \
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && \
 bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
+```
+
+## Quick Start คำสั่งรัน Google Drive
+```bash
+https://drive.google.com/file/d/1d7Cx6_GYI5-oalNlDHUWF69tHj_och_W/view?usp=drive_link
 ```
 
 ต้องรันด้วย **root** บน server ที่มี cPanel/WHM + LiteSpeed
