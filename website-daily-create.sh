@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.6
-# Updated: 2026-04-19 22:53 (UTC+7)
+# Version: 2.5.7
+# Updated: 2026-04-19 23:30 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -10,6 +10,11 @@
 # Example:    a1.com,theme-black.store
 # ============================================================================
 # CHANGELOG:
+# v2.5.7 (2026-04-19)
+#   - Step 10: ปิด Bot Fight Mode (API) → init → link → เปิด BFM กลับ
+#   - ลบ HTTP 200 check + Purge CF ออก (ไม่จำเป็นแล้ว)
+#   - Cloudflare API helper (cf_api) รวมศูนย์ auto-detect cfut_/cfk_
+#   - Root cause: Bot Fight Mode block QUIC.cloud callback
 # v2.5.6 (2026-04-19)
 #   - ลบ Step 6.5 init ออก (ย้ายไป Step 10 ทั้งหมด)
 #   - Step 10: Purge CF → เช็ค HTTP 200 → init → link
@@ -49,7 +54,7 @@
 
 set -o pipefail
 
-VERSION="2.5.6"
+VERSION="2.5.7"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -1166,7 +1171,7 @@ main() {
     done < <(grep '[^[:space:]]' "$CSV_FILE" | tail -n +2)
 
     # Step 10: QUIC.cloud init + link (หลัง loop จบ)
-    # Flow: Purge CF → เช็ค status 200 → init → link
+    # Flow: ปิด Bot Fight Mode → init → link → เปิด Bot Fight Mode กลับ
     if [ -n "$LINK_DOMAINS" ] && [ -n "$QC_CF_EMAIL" ] && [ -n "$QC_TOKEN" ]; then
         echo ""
         echo "════════════════════════════════════════"
@@ -1178,7 +1183,7 @@ main() {
 
         local LINK_COUNT=0
 
-        # แปลง cooldown text เป็นวินาที (เช่น "3m 24s" → 204)
+        # แปลง cooldown text เป็นวินาที
         parse_cooldown() {
             local TEXT="$1"
             local MINS SECS
@@ -1201,66 +1206,48 @@ main() {
             printf "\r\033[K"
         }
 
-        # Purge Cloudflare cache (ต้องมี CF_TOKEN + Zone ID)
-        purge_cf() {
-            local DOMAIN="$1"
-            if [ -z "$CF_TOKEN" ]; then
-                return 0
-            fi
-            local CF_AUTH_HEADER
+        # Cloudflare API helper (auto-detect cfut_ / cfk_)
+        cf_api() {
+            local METHOD="$1"
+            local ENDPOINT="$2"
+            local DATA="$3"
             if [[ "$CF_TOKEN" == cfut_* ]]; then
-                CF_AUTH_HEADER="Authorization: Bearer $CF_TOKEN"
-            else
-                CF_AUTH_HEADER="X-Auth-Key: $CF_TOKEN"
-            fi
-            local ZONE_ID
-            if [[ "$CF_TOKEN" == cfut_* ]]; then
-                ZONE_ID=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
-                    -H "Authorization: Bearer $CF_TOKEN" \
-                    -H "Content-Type: application/json" \
-                    | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-            else
-                ZONE_ID=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
-                    -H "X-Auth-Email: $QC_CF_EMAIL" \
-                    -H "X-Auth-Key: $CF_TOKEN" \
-                    -H "Content-Type: application/json" \
-                    | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-            fi
-            if [ -n "$ZONE_ID" ]; then
-                if [[ "$CF_TOKEN" == cfut_* ]]; then
-                    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+                if [ -n "$DATA" ]; then
+                    curl -s -X "$METHOD" "https://api.cloudflare.com/client/v4/$ENDPOINT" \
                         -H "Authorization: Bearer $CF_TOKEN" \
                         -H "Content-Type: application/json" \
-                        --data '{"purge_everything":true}' >/dev/null 2>&1
+                        -d "$DATA" 2>/dev/null
                 else
-                    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+                    curl -s -X "$METHOD" "https://api.cloudflare.com/client/v4/$ENDPOINT" \
+                        -H "Authorization: Bearer $CF_TOKEN" \
+                        -H "Content-Type: application/json" 2>/dev/null
+                fi
+            else
+                if [ -n "$DATA" ]; then
+                    curl -s -X "$METHOD" "https://api.cloudflare.com/client/v4/$ENDPOINT" \
                         -H "X-Auth-Email: $QC_CF_EMAIL" \
                         -H "X-Auth-Key: $CF_TOKEN" \
                         -H "Content-Type: application/json" \
-                        --data '{"purge_everything":true}' >/dev/null 2>&1
+                        -d "$DATA" 2>/dev/null
+                else
+                    curl -s -X "$METHOD" "https://api.cloudflare.com/client/v4/$ENDPOINT" \
+                        -H "X-Auth-Email: $QC_CF_EMAIL" \
+                        -H "X-Auth-Key: $CF_TOKEN" \
+                        -H "Content-Type: application/json" 2>/dev/null
                 fi
-                log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — Cloudflare purge ✅"
             fi
         }
 
-        # เช็ค HTTP status จาก internet (ต้อง 200 ก่อน init)
-        wait_for_200() {
-            local DOMAIN="$1"
-            local MAX_WAIT=5
-            local WAIT_I=0
-            while [ $WAIT_I -lt $MAX_WAIT ]; do
-                WAIT_I=$((WAIT_I+1))
-                local STATUS
-                STATUS=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN/" 2>/dev/null)
-                if [ "$STATUS" = "200" ]; then
-                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — HTTP 200 ✅"
-                    return 0
-                fi
-                log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — HTTP $STATUS (รอ... $WAIT_I/$MAX_WAIT)"
-                countdown 30 "$DOMAIN — รอเว็บ online"
-            done
-            log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ 200 หลังรอ ${MAX_WAIT} ครั้ง (ข้าม)"
-            return 1
+        # หา Zone ID
+        get_zone_id() {
+            cf_api GET "zones?name=$1" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+        }
+
+        # Bot Fight Mode toggle
+        set_bfm() {
+            local ZONE_ID="$1"
+            local STATE="$2"  # true / false
+            cf_api PUT "zones/$ZONE_ID/bot_management" "{\"fight_mode\":$STATE}" >/dev/null 2>&1
         }
 
         # init + link ทีละเว็บ
@@ -1270,7 +1257,7 @@ main() {
             local MAX_RETRY=5
             local ATTEMPT=0
 
-            # init ก่อน
+            # init
             local INIT_R
             INIT_R=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
                 --path="$DOCROOT" 2>&1)
@@ -1327,17 +1314,24 @@ main() {
 
             log_step "  [$LINK_COUNT/$LINK_TOTAL] $D"
 
-            # 1. Purge Cloudflare cache
-            purge_cf "$D"
+            # 1. ปิด Bot Fight Mode (ถ้ามี CF_TOKEN)
+            local ZID=""
+            if [ -n "$CF_TOKEN" ]; then
+                ZID=$(get_zone_id "$D")
+                if [ -n "$ZID" ]; then
+                    set_bfm "$ZID" "false"
+                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Bot Fight Mode OFF"
+                    countdown 5 "$D — รอหลังปิด BFM"
+                fi
+            fi
 
-            # 2. รอ HTTP 200
-            countdown 5 "$D — รอหลัง purge"
-            if wait_for_200 "$D"; then
-                # 3. Init + Link
-                try_init_link "$D"
-            else
-                LINK_FAIL=$((LINK_FAIL+1))
-                SUMMARY_WARN="${SUMMARY_WARN}  - $D (เว็บยังไม่ online — ข้าม QUIC)\n"
+            # 2. Init + Link
+            try_init_link "$D"
+
+            # 3. เปิด Bot Fight Mode กลับ
+            if [ -n "$ZID" ]; then
+                set_bfm "$ZID" "true"
+                log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Bot Fight Mode ON"
             fi
 
             # delay ก่อนเว็บถัดไป
