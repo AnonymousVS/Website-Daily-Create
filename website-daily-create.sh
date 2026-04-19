@@ -1339,6 +1339,8 @@ main() {
                 ' --path="$DOCROOT_D" 2>/dev/null)
                 if echo "$RM_RESULT" | grep -q "connected"; then
                     log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validated ✅"
+                elif echo "$RM_RESULT" | grep -q "no_data"; then
+                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math ข้าม (reconnect ที่ wp-admin)"
                 else
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validate: $RM_RESULT"
                 fi
@@ -1355,7 +1357,7 @@ main() {
 
             # delay ก่อนเว็บถัดไป
             if [ $LINK_COUNT -lt $LINK_TOTAL ]; then
-                countdown 30 "รอก่อนเว็บถัดไป"
+                countdown 3 "รอก่อนเว็บถัดไป"
             fi
         done < <(echo -e "$LINK_DOMAINS")
 
