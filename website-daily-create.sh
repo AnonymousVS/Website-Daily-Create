@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.5
-# Updated: 2026-04-19 22:00 (UTC+7)
+# Version: 2.5.6
+# Updated: 2026-04-19 22:30 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -10,6 +10,10 @@
 # Example:    a1.com,theme-black.store
 # ============================================================================
 # CHANGELOG:
+# v2.5.6 (2026-04-19)
+#   - ลบ .maintenance หลัง AI1WM restore (ป้องกัน QUIC.cloud init fail)
+#   - Step 10 retry เพิ่มเป็น 5 ครั้ง + countdown 60s (รอ Cloudflare settle)
+#   - Step 10 init retry แสดง retry count + เช็คผล init
 # v2.5.5 (2026-04-19)
 #   - QUIC.cloud link ย้ายจาก Step 6.5 → Step 10 หลัง loop จบ
 #   - Step 6.5 ทำแค่ init (anonymous mode) + เช็คผล init
@@ -43,7 +47,7 @@
 
 set -o pipefail
 
-VERSION="2.5.5"
+VERSION="2.5.6"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -678,6 +682,9 @@ step_restore() {
         SUMMARY_WARN="${SUMMARY_WARN}  - $DOMAIN (restore result unclear)\n"
     fi
 
+    # ลบ .maintenance ที่ AI1WM อาจค้างไว้ (ป้องกัน QUIC.cloud init fail)
+    rm -f "$DOCROOT/.maintenance" 2>/dev/null
+
     return 0
 }
 
@@ -1205,7 +1212,7 @@ main() {
         try_link() {
             local DOMAIN="$1"
             local DOCROOT="/home/${CPANEL_USER}/public_html/${DOMAIN}"
-            local MAX_RETRY=3
+            local MAX_RETRY=5
             local ATTEMPT=0
 
             while [ $ATTEMPT -lt $MAX_RETRY ]; do
@@ -1231,7 +1238,7 @@ main() {
                         countdown 5 "$DOMAIN — รอหลัง init"
                     else
                         log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init fail (Cloudflare อาจยัง settle ไม่เสร็จ)"
-                        countdown 30 "$DOMAIN — รอ Cloudflare settle"
+                        countdown 60 "$DOMAIN — รอ Cloudflare settle"
                     fi
                 elif echo "$RESULT" | grep -qi "try after"; then
                     local CD_TEXT
