@@ -838,8 +838,8 @@ step_cleanup() {
     fi
     sleep 3
 
-    # 6.7 Rank Math connect
-    log_step "6.7 Rank Math connect"
+    # 6.7 Rank Math setup (ใส่ credentials — validate ใน Step 10 หลัง BFM ปิด)
+    log_step "6.7 Rank Math setup"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
         delete_option("rank_math_registration_data");
@@ -852,12 +852,10 @@ step_cleanup() {
             "site_url"  => "https://'"$DOMAIN"'"
         ];
         update_option("rank_math_connect_data", $data);
-        \RankMath\Admin\Admin_Helper::get_registration_data($data);
-        $v = \RankMath\Admin\Admin_Helper::get_registration_data();
-        echo $v ? "connected" : "failed";
-    ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
-        && log_info "6.7 Rank Math connected ($RANKMATH_EMAIL)" \
-        || log_warn "6.7 Rank Math connect failed"
+        echo "set";
+    ' --path="$DOCROOT" 2>/dev/null | grep -q "set" \
+        && log_info "6.7 Rank Math credentials set ($RANKMATH_EMAIL)" \
+        || log_warn "6.7 Rank Math setup failed"
 
     # 6.8 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
     log_step "6.8 ลบ Rank Math sitemap cache"
@@ -1325,10 +1323,31 @@ main() {
                 fi
             fi
 
-            # 2. Init + Link
+            # 2. Rank Math validate (ตอน BFM ปิด — Rank Math server เข้าเว็บได้)
+            local DOCROOT_D="/home/${CPANEL_USER}/public_html/${D}"
+            if [ -n "$RANKMATH_EMAIL" ]; then
+                local RM_RESULT
+                RM_RESULT=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" eval '
+                    $data = get_option("rank_math_connect_data");
+                    if ($data) {
+                        \RankMath\Admin\Admin_Helper::get_registration_data($data);
+                        $v = \RankMath\Admin\Admin_Helper::get_registration_data();
+                        echo $v ? "connected" : "failed";
+                    } else {
+                        echo "no_data";
+                    }
+                ' --path="$DOCROOT_D" 2>/dev/null)
+                if echo "$RM_RESULT" | grep -q "connected"; then
+                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validated ✅"
+                else
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validate: $RM_RESULT"
+                fi
+            fi
+
+            # 3. Init + Link QUIC.cloud
             try_init_link "$D"
 
-            # 3. เปิด Bot Fight Mode กลับ
+            # 4. เปิด Bot Fight Mode กลับ
             if [ -n "$ZID" ]; then
                 set_bfm "$ZID" "true"
                 log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Bot Fight Mode ON"
