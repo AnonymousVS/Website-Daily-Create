@@ -781,23 +781,44 @@ step_cleanup() {
     fi
     sleep 3
 
-    # 6.6 Cloudflare API setup
-    if [ -n "$CF_TOKEN" ] && [ -n "$QC_CF_EMAIL" ]; then
+    # 6.6 Cloudflare API setup (auto-detect: API Token cfut_ / Global API Key cfk_)
+    if [ -n "$CF_TOKEN" ]; then
         log_step "6.6 Cloudflare API setup"
+
+        # Auto-detect auth type: cfut_ = API Token, cfk_ หรืออื่นๆ = Global API Key
+        local CF_IS_TOKEN=false
+        if [[ "$CF_TOKEN" == cfut_* ]]; then
+            CF_IS_TOKEN=true
+        fi
 
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare 1 --path="$DOCROOT" 2>/dev/null
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_key "$CF_TOKEN" --path="$DOCROOT" 2>/dev/null
-        sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_email "$QC_CF_EMAIL" --path="$DOCROOT" 2>/dev/null
+        if [ "$CF_IS_TOKEN" = true ]; then
+            # API Token → email ต้องว่าง (LiteSpeed ใช้ Authorization: Bearer)
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_email "" --path="$DOCROOT" 2>/dev/null
+        else
+            # Global API Key → ต้องใส่ email
+            sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_email "$QC_CF_EMAIL" --path="$DOCROOT" 2>/dev/null
+        fi
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_name "$DOMAIN" --path="$DOCROOT" 2>/dev/null
         sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" litespeed-option set cdn-cloudflare_clear 1 --path="$DOCROOT" 2>/dev/null
 
+        # หา Zone ID (auto-detect auth header)
         local ZONE_ID
-        ZONE_ID=$(curl -s -X GET \
-            "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
-            -H "X-Auth-Email: $QC_CF_EMAIL" \
-            -H "X-Auth-Key: $CF_TOKEN" \
-            -H "Content-Type: application/json" \
-            | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        if [ "$CF_IS_TOKEN" = true ]; then
+            ZONE_ID=$(curl -s -X GET \
+                "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+                -H "Authorization: Bearer $CF_TOKEN" \
+                -H "Content-Type: application/json" \
+                | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        else
+            ZONE_ID=$(curl -s -X GET \
+                "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+                -H "X-Auth-Email: $QC_CF_EMAIL" \
+                -H "X-Auth-Key: $CF_TOKEN" \
+                -H "Content-Type: application/json" \
+                | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        fi
 
         if [ -n "$ZONE_ID" ]; then
             sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval \
