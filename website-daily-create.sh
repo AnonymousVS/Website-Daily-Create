@@ -2,7 +2,7 @@
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
 # Version: 2.5.5
-# Updated: 2026-04-18 19:45 (UTC+7)
+# Updated: 2026-04-19 22:00 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -10,12 +10,14 @@
 # Example:    a1.com,theme-black.store
 # ============================================================================
 # CHANGELOG:
-# v2.5.5 (2026-04-18)
+# v2.5.5 (2026-04-19)
 #   - QUIC.cloud link ย้ายจาก Step 6.5 → Step 10 หลัง loop จบ
-#   - Step 6.5 ทำแค่ init (anonymous mode — ไม่มี rate limit)
-#   - Step 10: delay 30s + countdown นับถอยหลัง + auto retry 3 ครั้ง
-#   - ตรวจจับ cooldown อัตโนมัติ ("3m 24s" → 209s)
-#   - Process substitution ป้องกัน subshell
+#   - Step 6.5 ทำแค่ init (anonymous mode) + เช็คผล init
+#   - Step 10: delay 30s + countdown + auto retry 3 ครั้ง + auto init
+#   - Cloudflare API Token (cfut_) auto-detect + Bearer auth
+#   - CF_TOKEN แยกไฟล์ cf-token-Website-Daily-Create.conf (private repo)
+#   - LiteSpeed Cache: email ว่างอัตโนมัติเมื่อใช้ API Token
+#   - Root cause: QUIC.cloud init fail เพราะ Cloudflare ยัง settle ไม่เสร็จ
 # v2.5.4 (2026-04-18)
 #   - SUBDOMAIN_PREFIX ใช้ชื่อ domain เต็ม (เหมือน cPanel GUI)
 #   - แก้ error detection: เช็ค subdomain ก่อน already exists
@@ -1114,6 +1116,26 @@ main() {
     source "$SERVER_CONFIG"
     echo "Config: $SERVER_CONFIG" >> "$LOG_FILE"
 
+    # โหลด cf-token แยก (Cloudflare API Token เก็บใน private repo หรือ local file)
+    # ค้นหาตามลำดับ:
+    #   1. อยู่ข้างๆ CSV file
+    #   2. อยู่ข้างๆ server-config.conf
+    #   3. /usr/local/etc/website-daily-create/cf-token-Website-Daily-Create.conf
+    local CF_TOKEN_FILE=""
+    if [ -f "${CONFIG_DIR}/cf-token-Website-Daily-Create.conf" ]; then
+        CF_TOKEN_FILE="${CONFIG_DIR}/cf-token-Website-Daily-Create.conf"
+    elif [ -f "$(dirname "$SERVER_CONFIG")/cf-token-Website-Daily-Create.conf" ]; then
+        CF_TOKEN_FILE="$(dirname "$SERVER_CONFIG")/cf-token-Website-Daily-Create.conf"
+    elif [ -f "/usr/local/etc/website-daily-create/cf-token-Website-Daily-Create.conf" ]; then
+        CF_TOKEN_FILE="/usr/local/etc/website-daily-create/cf-token-Website-Daily-Create.conf"
+    fi
+    if [ -n "$CF_TOKEN_FILE" ]; then
+        source "$CF_TOKEN_FILE"
+        echo "CF Token: $CF_TOKEN_FILE" >> "$LOG_FILE"
+    elif [ -z "$CF_TOKEN" ]; then
+        echo -e "${YELLOW}[⚠️] CF_TOKEN ไม่ได้ตั้ง (Cloudflare Zone ID จะข้าม)${NC}"
+    fi
+
     # ตรวจสอบตัวแปรสำคัญจาก server-config.conf
     if [ -z "$CPANEL_USER" ]; then
         echo -e "${RED}[❌] CPANEL_USER ไม่ได้ตั้งค่าใน server-config.conf${NC}"
@@ -1200,10 +1222,17 @@ main() {
                     return 0
                 elif echo "$RESULT" | grep -qi "activate QC first"; then
                     # init ยังไม่สำเร็จ → init ก่อน แล้ว retry
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ init → กำลัง init..."
-                    sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
-                        --path="$DOCROOT" 2>/dev/null
-                    countdown 10 "$DOMAIN — รอหลัง init"
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — ยังไม่ init → กำลัง init... (retry $ATTEMPT/$MAX_RETRY)"
+                    local INIT_R
+                    INIT_R=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" litespeed-online init \
+                        --path="$DOCROOT" 2>&1)
+                    if echo "$INIT_R" | grep -qi "success\|Congratulations"; then
+                        log_info "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init สำเร็จ → retry link"
+                        countdown 5 "$DOMAIN — รอหลัง init"
+                    else
+                        log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — init fail (Cloudflare อาจยัง settle ไม่เสร็จ)"
+                        countdown 30 "$DOMAIN — รอ Cloudflare settle"
+                    fi
                 elif echo "$RESULT" | grep -qi "try after"; then
                     local CD_TEXT
                     CD_TEXT=$(echo "$RESULT" | grep -oP 'try after \K[^.]+')
@@ -1212,7 +1241,7 @@ main() {
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — rate limit ($CD_TEXT)"
                     countdown "$CD_SECS" "$DOMAIN"
                 elif echo "$RESULT" | grep -qi "Invalid API"; then
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — API error → รอ 60s"
+                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — API error → รอ 60s (retry $ATTEMPT/$MAX_RETRY)"
                     countdown 60 "$DOMAIN — API cooldown"
                 else
                     log_warn "  [$LINK_COUNT/$LINK_TOTAL] $DOMAIN — fail: $(echo "$RESULT" | tail -1)"
