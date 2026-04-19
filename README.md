@@ -14,7 +14,7 @@ domains-config.csv        ← รายชื่อ domain (เปลี่ย�
 
 ```bash
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/server-config.conf -o /tmp/server-config.conf && \
-curl -s -H "Authorization: token ghp_2A18Rc7JLgqpFaRcqzS97uvzRdUป" \
+curl -s -H "Authorization: token ghp_2A18Rc7JLgqpFaRcqzS97uvzRdU" \
 https://raw.githubusercontent.com/AnonymousVS/config/main/cf-token-Website-Daily-Create.conf -o /tmp/cf-token-Website-Daily-Create.conf && \
 curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/domains-config.csv -o /tmp/domains-config.csv && \
 bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Website-Daily-Create/main/website-daily-create.sh) /tmp/domains-config.csv
