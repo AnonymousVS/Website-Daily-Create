@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================================
 # website-daily-create.sh — Bulk WordPress Site Creation Pipeline
-# Version: 2.5.7
-# Updated: 2026-04-19 23:30 (UTC+7)
+# Version: 2.5.8
+# Updated: 2026-04-20 17:14 (UTC+7)
 # Location: /usr/local/sbin/website-daily-create.sh
 # Usage: website-daily-create.sh /path/to/sites.csv
 # ============================================================================
@@ -10,6 +10,11 @@
 # Example:    a1.com,theme-black.store
 # ============================================================================
 # CHANGELOG:
+# v2.5.8 (2026-04-20)
+#   - Rank Math: plan=free (ไม่ต้อง Pro plugin)
+#   - Rank Math: ใส่ get_registration_data กลับ (encrypt ถูกต้อง)
+#   - Rank Math: ลบ validate ออกจาก Step 10 (ทำใน Step 6.7 แล้ว)
+#   - Rank Math: ลบ notifications/transients/cache เก่า
 # v2.5.7 (2026-04-19)
 #   - Step 10: ปิด Bot Fight Mode (API) → init → link → เปิด BFM กลับ
 #   - ลบ HTTP 200 check + Purge CF ออก (ไม่จำเป็นแล้ว)
@@ -54,7 +59,7 @@
 
 set -o pipefail
 
-VERSION="2.5.7"
+VERSION="2.5.8"
 
 # ========================== CONFIG ==========================================
 # --- Paths ---
@@ -838,11 +843,15 @@ step_cleanup() {
     fi
     sleep 3
 
-    # 6.7 Rank Math setup (ใส่ credentials — validate ใน Step 10 หลัง BFM ปิด)
-    log_step "6.7 Rank Math setup"
+    # 6.7 Rank Math connect (encrypt + save ผ่าน official API)
+    log_step "6.7 Rank Math connect"
     sudo -u "$CPUSER" $PHP_CLI "$WP_CLI" eval '
         delete_option("rank_math_connect_data");
         delete_option("rank_math_registration_data");
+        delete_option("rank_math_notifications");
+        delete_option("rank_math_admin_notices");
+        delete_transient("rank_math_registration_data");
+        delete_transient("rank_math_connect_data");
         $data = [
             "username"  => "'"$RANKMATH_EMAIL"'",
             "email"     => "'"$RANKMATH_EMAIL"'",
@@ -852,10 +861,12 @@ step_cleanup() {
             "site_url"  => "https://'"$DOMAIN"'"
         ];
         update_option("rank_math_connect_data", $data);
-        echo "set";
-    ' --path="$DOCROOT" 2>/dev/null | grep -q "set" \
-        && log_info "6.7 Rank Math credentials set ($RANKMATH_EMAIL)" \
-        || log_warn "6.7 Rank Math setup failed"
+        \RankMath\Admin\Admin_Helper::get_registration_data($data);
+        $v = \RankMath\Admin\Admin_Helper::get_registration_data();
+        echo $v ? "connected" : "failed";
+    ' --path="$DOCROOT" 2>/dev/null | grep -q "connected" \
+        && log_info "6.7 Rank Math connected ($RANKMATH_EMAIL)" \
+        || log_warn "6.7 Rank Math connect failed"
 
     # 6.8 ลบ Rank Math sitemap cache (URL เก่าจาก .wpress)
     log_step "6.8 ลบ Rank Math sitemap cache"
@@ -1323,33 +1334,10 @@ main() {
                 fi
             fi
 
-            # 2. Rank Math validate (ตอน BFM ปิด — Rank Math server เข้าเว็บได้)
-            local DOCROOT_D="/home/${CPANEL_USER}/public_html/${D}"
-            if [ -n "$RANKMATH_EMAIL" ]; then
-                local RM_RESULT
-                RM_RESULT=$(sudo -u "$CPANEL_USER" $PHP_CLI "$WP_CLI" eval '
-                    $data = get_option("rank_math_connect_data");
-                    if ($data) {
-                        \RankMath\Admin\Admin_Helper::get_registration_data($data);
-                        $v = \RankMath\Admin\Admin_Helper::get_registration_data();
-                        echo $v ? "connected" : "failed";
-                    } else {
-                        echo "no_data";
-                    }
-                ' --path="$DOCROOT_D" 2>/dev/null)
-                if echo "$RM_RESULT" | grep -q "connected"; then
-                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validated ✅"
-                elif echo "$RM_RESULT" | grep -q "no_data"; then
-                    log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math ข้าม (reconnect ที่ wp-admin)"
-                else
-                    log_warn "  [$LINK_COUNT/$LINK_TOTAL] $D — Rank Math validate: $RM_RESULT"
-                fi
-            fi
-
-            # 3. Init + Link QUIC.cloud
+            # 2. Init + Link QUIC.cloud
             try_init_link "$D"
 
-            # 4. เปิด Bot Fight Mode กลับ
+            # 3. เปิด Bot Fight Mode กลับ
             if [ -n "$ZID" ]; then
                 set_bfm "$ZID" "true"
                 log_info "  [$LINK_COUNT/$LINK_TOTAL] $D — Bot Fight Mode ON"
